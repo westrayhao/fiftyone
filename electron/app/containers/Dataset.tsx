@@ -1,22 +1,18 @@
-import React, { createRef, useState } from "react";
-import { Switch, Route, Link, Redirect, useRouteMatch } from "react-router-dom";
-import {
-  Sidebar,
-  Container,
-  Menu,
-  Ref,
-  Sticky,
-  Message,
-  Segment,
-} from "semantic-ui-react";
+import React, { useState, useEffect } from "react";
+import { Switch, Route, Redirect, useRouteMatch } from "react-router-dom";
+import { useRecoilValue } from "recoil";
+import { Container, Message, Segment } from "semantic-ui-react";
 
+import SamplesContainer from "./SamplesContainer";
 import Distributions from "../components/Distributions";
-import InfoItem from "../components/InfoItem";
-import Player51 from "../components/Flashlight/Player51/Player51";
-import Samples from "../components/Samples";
-import Search from "../components/Search";
+import HorizontalNav from "../components/HorizontalNav";
+import SampleModal from "../components/SampleModal";
+import { ModalWrapper, Overlay } from "../components/utils";
 import routes from "../constants/routes.json";
+import * as atoms from "../recoil/atoms";
+import * as selectors from "../recoil/selectors";
 import connect from "../utils/connect";
+import { VALID_LABEL_TYPES } from "../utils/labels";
 
 function NoDataset() {
   return (
@@ -30,17 +26,57 @@ function Dataset(props) {
   const { path, url } = useRouteMatch();
   const { connected, loading, port, state, displayProps } = props;
   const hasDataset = Boolean(state && state.dataset);
-  const stickyRef = createRef();
-  const tabs = [routes.SAMPLES, routes.LABELS, routes.TAGS, routes.SCALARS];
-  const [view, setView] = useState({ visible: false, sample: null });
+  const tabs = [routes.SAMPLES, routes.TAGS, routes.LABELS, routes.SCALARS];
+  const [modal, setModal] = useState({
+    visible: false,
+    sample: null,
+    activeLabels: {},
+  });
+
+  const datasetName = useRecoilValue(selectors.datasetName);
+  const currentSamples = useRecoilValue(atoms.currentSamples);
+  const colorMapping = useRecoilValue(selectors.labelColorMapping);
+  const labelNames = useRecoilValue(selectors.labelNames);
+  const labelTypes = useRecoilValue(selectors.labelTypes);
+  const fieldSchema = useRecoilValue(selectors.fieldSchema);
+
+  // select any new labels by default
+  useEffect(() => {
+    const newSelection = { ...displayProps.activeLabels };
+    for (const label of labelNames) {
+      if (
+        newSelection[label] === undefined &&
+        VALID_LABEL_TYPES.includes(labelTypes[label])
+      ) {
+        newSelection[label] = true;
+      }
+    }
+    displayProps.setActiveLabels(newSelection);
+  }, [datasetName, labelNames]);
+
+  const handleHideModal = () => setModal({ visible: false, sample: null });
+  useEffect(() => {
+    document.body.classList.toggle("noscroll", modal.visible);
+
+    setModal({
+      ...modal,
+      activeLabels: modal.visible
+        ? {
+            ...displayProps.activeLabels,
+            ...displayProps.activeOther,
+          }
+        : {},
+    });
+  }, [modal.visible]);
+
   let src = null;
   let s = null;
-  if (view.sample) {
-    const path = view.sample.filepath;
-    const id = view.sample._id.$oid;
+  if (modal.sample) {
+    const path = modal.sample.filepath;
+    const id = modal.sample._id.$oid;
     const host = `http://127.0.0.1:${port}/`;
     src = `${host}?path=${path}&id=${id}`;
-    s = view.sample;
+    s = modal.sample;
   }
   if (loading) {
     return <Redirect to={routes.LOADING} />;
@@ -50,117 +86,77 @@ function Dataset(props) {
     return <Redirect to={routes.SETUP} />;
   }
 
+  let modalProps = {};
+  if (modal.visible && modal.sample) {
+    const currentSampleIndex = currentSamples.findIndex(
+      (sample) => sample._id.$oid == modal.sample._id.$oid
+    );
+    const previousSample = currentSamples[currentSampleIndex - 1];
+    if (previousSample) {
+      modalProps.onPrevious = () =>
+        setModal({ ...modal, sample: previousSample });
+    }
+    const nextSample = currentSamples[currentSampleIndex + 1];
+    if (nextSample) {
+      modalProps.onNext = () => setModal({ ...modal, sample: nextSample });
+    }
+  }
+
   return (
     <>
-      <Sidebar
-        target={stickyRef}
-        onHide={() => setView({ visible: false, sample: null })}
-        style={{ zIndex: 100001, width: "50%", padding: 0 }}
-        as={Menu}
-        animation="overlay"
-        direction="right"
-        vertical
-        visible={view.visible}
-      >
-        {s ? (
-          <>
-            <Player51
-              src={src}
-              style={{
-                width: "100%",
-                position: "relative",
-              }}
-              sample={view.sample}
-              colors={displayProps.colors}
-              activeLabels={displayProps.activeLabels}
-            />
-            <InfoItem k="id" v={s._id.$oid} />
-            <InfoItem k="filepath" v={s.filepath} />
-            <InfoItem k="tags" v={JSON.stringify(s.tags, 2)} />
-            <InfoItem k="metadata" v={JSON.stringify(s.metadata, 2)} />
-            {Object.keys(s).map((k, i) => {
-              if (s[k] && s[k]._cls === "Classification") {
-                return (
-                  <>
-                    <InfoItem key={i} k={k} v={s[k].label} />
-                    <pre style={{ padding: "1rem" }}>
-                      {JSON.stringify(s[k], null, 2)}
-                    </pre>
-                  </>
-                );
-              } else if (s[k] && s[k]._cls === "Detections") {
-                const l = s[k].detections.length;
-                return (
-                  <>
-                    <InfoItem
-                      key={i}
-                      k={k}
-                      v={`${l} detection${l === 1 ? "" : "s"}`}
-                    />
-                    <pre style={{ padding: "1rem" }}>
-                      {JSON.stringify(s[k], null, 2)}
-                    </pre>
-                  </>
-                );
-              }
-            })}
-          </>
-        ) : null}
-      </Sidebar>
-      <Ref innerRef={stickyRef}>
-        <Container fluid={true}>
-          <Sticky context={stickyRef}>
-            <Container
-              fluid={true}
-              style={{
-                background: "hsl(210, 20%, 15%)",
-                paddingTop: "2rem",
-                zIndex: 1000000,
-              }}
-            >
-              <Menu pointing secondary>
-                {tabs.map((v, i) => {
-                  return (
-                    <Link key={i} to={v}>
-                      <Menu.Item
-                        name={v.slice(1)}
-                        active={v === props.location.pathname}
-                      />
-                    </Link>
-                  );
-                })}
-              </Menu>
-            </Container>
-          </Sticky>
-          <Switch>
-            <Route exact path={routes.DATASET}>
-              <Redirect to={routes.SAMPLES} />
-            </Route>
-            {hasDataset ? (
-              <>
-                <Route path={routes.SAMPLES}>
-                  <Samples
-                    {...props.socket}
-                    setView={setView}
-                    displayProps={displayProps}
-                  />
-                </Route>
-                <Route path={routes.LABELS}>
-                  <Distributions group="labels" />
-                </Route>
-                <Route path={routes.TAGS}>
-                  <Distributions group="tags" />
-                </Route>
-                <Route path={routes.SCALARS}>
-                  <Distributions group="scalars" />
-                </Route>
-              </>
-            ) : (
-              <NoDataset />
-            )}
-          </Switch>
-        </Container>
-      </Ref>
+      {modal.visible ? (
+        <ModalWrapper>
+          <Overlay onClick={handleHideModal} />
+          <SampleModal
+            activeLabels={modal.activeLabels}
+            fieldSchema={fieldSchema}
+            colorMapping={colorMapping}
+            sample={modal.sample}
+            sampleUrl={src}
+            onClose={handleHideModal}
+            {...modalProps}
+          />
+        </ModalWrapper>
+      ) : null}
+      <Container fluid={true}>
+        <HorizontalNav
+          currentPath={props.location.pathname}
+          entries={tabs.map((path) => ({ path, name: path.slice(1) }))}
+        />
+        <Switch>
+          <Route exact path={routes.DATASET}>
+            <Redirect to={routes.SAMPLES} />
+          </Route>
+          {hasDataset ? (
+            <>
+              <Route path={routes.SAMPLES}>
+                <SamplesContainer
+                  {...props.socket}
+                  setView={(sample) =>
+                    setModal({
+                      ...modal,
+                      visible: true,
+                      sample,
+                    })
+                  }
+                  displayProps={displayProps}
+                />
+              </Route>
+              <Route path={routes.LABELS}>
+                <Distributions group="labels" />
+              </Route>
+              <Route path={routes.TAGS}>
+                <Distributions group="tags" />
+              </Route>
+              <Route path={routes.SCALARS}>
+                <Distributions group="scalars" />
+              </Route>
+            </>
+          ) : (
+            <NoDataset />
+          )}
+        </Switch>
+      </Container>
     </>
   );
 }

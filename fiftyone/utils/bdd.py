@@ -1,30 +1,12 @@
 """
-Utilities for working with datasets in Berkeley DeepDrive (BDD) format.
-
-The BDD dataset: https://bdd-data.berkeley.edu.
+Utilities for working with datasets in
+`Berkeley DeepDrive (BDD) format <https://bdd-data.berkeley.edu>`_.
 
 | Copyright 2017-2020, Voxel51, Inc.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
-# pragma pylint: disable=redefined-builtin
-# pragma pylint: disable=unused-wildcard-import
-# pragma pylint: disable=wildcard-import
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
-from builtins import *
-
-# pragma pylint: enable=redefined-builtin
-# pragma pylint: enable=unused-wildcard-import
-# pragma pylint: enable=wildcard-import
-
-from collections import defaultdict
-import logging
 import os
-
-import numpy as np
 
 import eta.core.data as etad
 import eta.core.geometry as etag
@@ -33,18 +15,16 @@ import eta.core.objects as etao
 import eta.core.utils as etau
 import eta.core.serial as etas
 
+import fiftyone as fo
 import fiftyone.core.labels as fol
 import fiftyone.core.metadata as fom
 import fiftyone.core.utils as fou
-import fiftyone.types as fot
 import fiftyone.utils.data as foud
 
 
-logger = logging.getLogger(__name__)
-
-
-class BDDSampleParser(foud.ImageLabelsSampleParser):
-    """Parser for samples in BDD format.
+class BDDSampleParser(foud.LabeledImageTupleSampleParser):
+    """Parser for samples in
+    `Berkeley DeepDrive (BDD) format <https://bdd-data.berkeley.edu>`_.
 
     This implementation supports samples that are
     ``(image_or_path, anno_or_path)`` tuples, where:
@@ -84,25 +64,49 @@ class BDDSampleParser(foud.ImageLabelsSampleParser):
                 ...
             }
 
-          or the path to such a JSON file on disk.
+          or the path to such a JSON file on disk. For unlabeled images,
+          ``anno_or_path`` can be ``None``.
 
-    See :class:`fiftyone.types.BDDDataset` for more format details.
+    See :class:`fiftyone.types.dataset_types.BDDDataset` for more format
+    details.
+
+    Args:
+        expand (True): whether to expand the image labels into a dictionary of
+            :class:`fiftyone.core.labels.Label` instances
+        prefix (None): a string prefix to prepend to each label name in the
+            expanded label dictionary. Only applicable when ``expand`` is True
+        labels_dict (None): a dictionary mapping names of attributes/objects
+            in the image labels to field names into which to expand them. Only
+            applicable when ``expand`` is True
+        multilabel (False): whether to store frame attributes in a single
+            :class:`fiftyone.core.labels.Classifications` instance. Only
+            applicable when ``expand`` is True
+        skip_non_categorical (False): whether to skip non-categorical frame
+            attributes (True) or cast them to strings (False). Only applicable
+            when ``expand`` is True
     """
 
-    def parse_image(self, sample):
-        """Parses the image from the given sample.
+    def __init__(
+        self,
+        expand=True,
+        prefix=None,
+        labels_dict=None,
+        multilabel=False,
+        skip_non_categorical=False,
+    ):
+        super().__init__()
+        self.expand = expand
+        self.prefix = prefix
+        self.labels_dict = labels_dict
+        self.multilabel = multilabel
+        self.skip_non_categorical = skip_non_categorical
 
-        Args:
-            sample: the sample
+    @property
+    def label_cls(self):
+        return fol.ImageLabels if not self.expand else None
 
-        Returns:
-            a numpy image
-        """
-        image_or_path = sample[0]
-        return self._parse_image(image_or_path)
-
-    def parse_label(self, sample):
-        """Parses the labels from the given sample.
+    def get_label(self):
+        """Returns the label for the current sample.
 
         Args:
             sample: the sample
@@ -110,79 +114,197 @@ class BDDSampleParser(foud.ImageLabelsSampleParser):
         Returns:
             a :class:`fiftyone.core.labels.ImageLabels` instance
         """
-        labels = sample[1]
+        labels = self.current_sample[1]
 
         # We must have the image to convert to relative coordinates
-        img = self._parse_image(sample[0])
+        img = self._current_image
 
         return self._parse_label(labels, img)
 
-    def parse(self, sample):
-        """Parses the given sample.
-
-        Args:
-            sample: the sample
-
-        Returns:
-            img: a numpy image
-            label: a :class:`fiftyone.core.labels.ImageLabels` instance
-        """
-        img, labels = sample
-        img = self._parse_image(img)
-        label = self._parse_label(labels, img)
-        return img, label
-
-    def _parse_image(self, image_or_path):
-        if etau.is_str(image_or_path):
-            return etai.read(image_or_path)
-
-        return np.asarray(image_or_path)
-
     def _parse_label(self, labels, img):
+        if labels is None:
+            return None
+
         if etau.is_str(labels):
             labels = etas.load_json(labels)
 
         frame_size = etai.to_frame_size(img=img)
-        return _parse_bdd_annotation(labels, frame_size)
+        label = _parse_bdd_annotation(labels, frame_size)
+
+        if label is not None and self.expand:
+            label = label.expand(
+                prefix=self.prefix,
+                labels_dict=self.labels_dict,
+                multilabel=self.multilabel,
+                skip_non_categorical=self.skip_non_categorical,
+            )
+
+        return label
 
 
-def parse_bdd_dataset(dataset_dir):
-    """Parses the BDD dataset stored in the given directory.
+class BDDDatasetImporter(foud.LabeledImageDatasetImporter):
+    """Importer for BDD datasets stored on disk.
 
-    See :class:`fiftyone.types.BDDDataset` for more format details.
+    See :class:`fiftyone.types.dataset_types.BDDDataset` for format details.
 
     Args:
         dataset_dir: the dataset directory
-
-    Returns:
-        a list of ``(img_path, image_metadata, image_labels)`` tuples
+        expand (True): whether to expand the image labels into a dictionary of
+            :class:`fiftyone.core.labels.Label` instances
+        prefix (None): a string prefix to prepend to each label name in the
+            expanded label dictionary. Only applicable when ``expand`` is True
+        labels_dict (None): a dictionary mapping names of attributes/objects
+            in the image labels to field names into which to expand them. Only
+            applicable when ``expand`` is True
+        multilabel (False): whether to store frame attributes in a single
+            :class:`fiftyone.core.labels.Classifications` instance. Only
+            applicable when ``expand`` is True
+        skip_non_categorical (False): whether to skip non-categorical frame
+            attributes (True) or cast them to strings (False). Only applicable
+            when ``expand`` is True
     """
-    data_dir = os.path.join(dataset_dir, "data")
-    labels_path = os.path.join(dataset_dir, "labels.json")
 
-    anno_dict_map = load_bdd_annotations(labels_path)
+    def __init__(
+        self,
+        dataset_dir,
+        expand=True,
+        prefix=None,
+        labels_dict=None,
+        multilabel=False,
+        skip_non_categorical=False,
+    ):
+        super().__init__(dataset_dir)
+        self.expand = expand
+        self.prefix = prefix
+        self.labels_dict = labels_dict
+        self.multilabel = multilabel
+        self.skip_non_categorical = skip_non_categorical
+        self._data_dir = None
+        self._labels_path = None
+        self._anno_dict_map = None
+        self._filenames = None
+        self._iter_filenames = None
 
-    filenames = etau.list_files(data_dir, abs_paths=False)
+    def __iter__(self):
+        self._iter_filenames = iter(self._filenames)
+        return self
 
-    samples = []
-    for filename in filenames:
-        img_path = os.path.join(data_dir, filename)
+    def __len__(self):
+        return len(self._filenames)
 
-        metadata = fom.ImageMetadata.build_for(img_path)
+    def __next__(self):
+        filename = next(self._iter_filenames)
 
-        frame_size = (metadata.width, metadata.height)
-        anno_dict = anno_dict_map[filename]
-        image_labels = _parse_bdd_annotation(anno_dict, frame_size)
+        image_path = os.path.join(self._data_dir, filename)
 
-        samples.append((img_path, metadata, image_labels))
+        image_metadata = fom.ImageMetadata.build_for(image_path)
 
-    return samples
+        anno_dict = self._anno_dict_map.get(filename, None)
+        if anno_dict is not None:
+            # Labeled image
+            frame_size = (image_metadata.width, image_metadata.height)
+            label = _parse_bdd_annotation(anno_dict, frame_size)
+        else:
+            label = None
+
+        if label is not None and self.expand:
+            label = label.expand(
+                prefix=self.prefix,
+                labels_dict=self.labels_dict,
+                multilabel=self.multilabel,
+                skip_non_categorical=self.skip_non_categorical,
+            )
+
+        return image_path, image_metadata, label
+
+    @property
+    def has_dataset_info(self):
+        return False
+
+    @property
+    def has_image_metadata(self):
+        return True
+
+    @property
+    def label_cls(self):
+        return fol.ImageLabels if not self.expand else None
+
+    def setup(self):
+        self._data_dir = os.path.join(self.dataset_dir, "data")
+        self._labels_path = os.path.join(self.dataset_dir, "labels.json")
+        if os.path.isfile(self._labels_path):
+            self._anno_dict_map = load_bdd_annotations(self._labels_path)
+        else:
+            self._anno_dict_map = {}
+
+        self._filenames = etau.list_files(self._data_dir, abs_paths=False)
+
+
+class BDDDatasetExporter(foud.LabeledImageDatasetExporter):
+    """Exporter that writes BDD datasets to disk.
+
+    See :class:`fiftyone.types.dataset_types.BDDDataset` for format details.
+
+    Args:
+        export_dir: the directory to write the export
+        image_format (None): the image format to use when writing in-memory
+            images to disk. By default, ``fiftyone.config.default_image_ext``
+            is used
+    """
+
+    def __init__(self, export_dir, image_format=None):
+        if image_format is None:
+            image_format = fo.config.default_image_ext
+
+        super().__init__(export_dir)
+        self.image_format = image_format
+        self._data_dir = None
+        self._labels_path = None
+        self._annotations = None
+        self._filename_maker = None
+
+    @property
+    def requires_image_metadata(self):
+        return True
+
+    @property
+    def label_cls(self):
+        return fol.ImageLabels
+
+    def setup(self):
+        self._data_dir = os.path.join(self.export_dir, "data")
+        self._labels_path = os.path.join(self.export_dir, "labels.json")
+        self._annotations = []
+        self._filename_maker = fou.UniqueFilenameMaker(
+            output_dir=self._data_dir, default_ext=self.image_format
+        )
+
+    def export_sample(
+        self, image_or_path, image_labels_or_dict, metadata=None
+    ):
+        out_image_path = self._export_image_or_path(
+            image_or_path, self._filename_maker
+        )
+
+        if metadata is None:
+            metadata = fom.ImageMetadata.build_for(out_image_path)
+
+        if image_labels_or_dict is not None:
+            filename = os.path.basename(out_image_path)
+            annotation = _make_bdd_annotation(
+                image_labels_or_dict, metadata, filename
+            )
+            self._annotations.append(annotation)
+
+    def close(self, *args):
+        etas.write_json(self._annotations, self._labels_path)
 
 
 def load_bdd_annotations(json_path):
     """Loads the BDD annotations from the given JSON file.
 
-    See :class:`fiftyone.types.BDDDataset` for more format details.
+    See :class:`fiftyone.types.dataset_types.BDDDataset` for more format
+    details.
 
     Args:
         json_path: the path to the annotations JSON file
@@ -192,64 +314,6 @@ def load_bdd_annotations(json_path):
     """
     annotations = etas.load_json(json_path)
     return {d["name"]: d for d in annotations}
-
-
-def export_bdd_dataset(samples, label_field, dataset_dir):
-    """Exports the given samples to disk as a BDD dataset.
-
-    See :class:`fiftyone.types.BDDDataset` for more format details.
-
-    The raw images are directly copied to their destinations, maintaining their
-    original formats and names, unless a name conflict would occur, in which
-    case an index of the form ``"-%d" % count`` is appended to the base
-    filename.
-
-    Args:
-        samples: an iterable of :class:`fiftyone.core.sample.Sample` instances
-        label_field: the name of the :class:`fiftyone.core.labels.ImageLabels`
-            field of the samples to export
-        dataset_dir: the directory to which to write the dataset
-    """
-    data_dir = os.path.join(dataset_dir, "data")
-    labels_path = os.path.join(dataset_dir, "labels.json")
-
-    logger.info(
-        "Writing samples to '%s' in '%s' format...",
-        dataset_dir,
-        etau.get_class_name(fot.BDDDataset),
-    )
-
-    etau.ensure_dir(data_dir)
-
-    annotations = []
-    data_filename_counts = defaultdict(int)
-    with fou.ProgressBar() as pb:
-        for sample in pb(samples):
-            img_path = sample.filepath
-            name, ext = os.path.splitext(os.path.basename(img_path))
-            data_filename_counts[name] += 1
-
-            count = data_filename_counts[name]
-            if count > 1:
-                name += "-%d" + count
-
-            filename = name + ext
-            out_img_path = os.path.join(data_dir, filename)
-
-            etau.copy_file(img_path, out_img_path)
-
-            metadata = sample.metadata
-            if metadata is None:
-                metadata = fom.ImageMetadata.build_for(img_path)
-
-            image_labels = sample[label_field]
-            annotation = _make_bdd_annotation(image_labels, metadata, filename)
-            annotations.append(annotation)
-
-    logger.info("Writing labels to '%s'", labels_path)
-    etas.write_json(annotations, labels_path)
-
-    logger.info("Dataset created")
 
 
 def _parse_bdd_annotation(d, frame_size):
@@ -262,6 +326,9 @@ def _parse_bdd_annotation(d, frame_size):
     # Objects
     objects = d.get("labels", [])
     for obj in objects:
+        if "box2d" not in obj:
+            continue
+
         label = obj["category"]
 
         bbox = obj["box2d"]
@@ -285,14 +352,22 @@ def _parse_bdd_annotation(d, frame_size):
     return fol.ImageLabels(labels=image_labels)
 
 
-def _make_bdd_annotation(image_labels, metadata, filename):
+def _make_bdd_annotation(image_labels_or_dict, metadata, filename):
+    # Convert to `eta.core.image.ImageLabels` format
+    if isinstance(image_labels_or_dict, dict):
+        image_labels = etai.ImageLabels()
+        for name, label in image_labels_or_dict.items():
+            image_labels.merge_labels(label.to_image_labels(name=name))
+    else:
+        image_labels = image_labels_or_dict.labels
+
     # Frame attributes
-    frame_attrs = {a.name: a.value for a in image_labels.labels.attrs}
+    frame_attrs = {a.name: a.value for a in image_labels.attrs}
 
     # Objects
     labels = []
     frame_size = (metadata.width, metadata.height)
-    for idx, obj in enumerate(image_labels.labels.objects):
+    for idx, obj in enumerate(image_labels.objects):
         tlx, tly, w, h = obj.bounding_box.coords_in(frame_size=frame_size)
         labels.append(
             {
@@ -306,9 +381,9 @@ def _make_bdd_annotation(image_labels, metadata, filename):
         )
 
     return {
+        "name": filename,
         "attributes": frame_attrs,
         "labels": labels,
-        "name": filename,
     }
 
 

@@ -5,26 +5,27 @@ FiftyOne Zoo Datasets provided by ``tensorflow_datasets``.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
-# pragma pylint: disable=redefined-builtin
-# pragma pylint: disable=unused-wildcard-import
-# pragma pylint: disable=wildcard-import
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
-from builtins import *
-
-# pragma pylint: enable=redefined-builtin
-# pragma pylint: enable=unused-wildcard-import
-# pragma pylint: enable=wildcard-import
-
 import fiftyone.core.utils as fou
 import fiftyone.types as fot
 import fiftyone.utils.imagenet as foui
 import fiftyone.utils.data as foud
 import fiftyone.zoo as foz
 
-tfds = fou.lazy_import("tensorflow_datasets", callback=fou.ensure_tfds)
+
+_TFDS_IMPORT_ERROR = """
+
+You tried to download a dataset from the FiftyOne Dataset Zoo using the
+TensorFlow backend, but you do not have the necessary packages installed.
+
+Ensure that you have `tensorflow` and `tensorflow_datasets` installed on your
+machine, and then try running this command again.
+
+See https://voxel51.com/docs/fiftyone/user_guide/dataset_creation/zoo.html
+for more information about working with the Dataset Zoo.
+"""
+
+_callback = lambda: fou.ensure_tfds(error_msg=_TFDS_IMPORT_ERROR)
+tfds = fou.lazy_import("tensorflow_datasets", callback=_callback)
 
 
 class TFDSDataset(foz.ZooDataset):
@@ -377,7 +378,7 @@ class COCO2014Dataset(TFDSDataset):
         ].names
         get_num_samples_fcn = lambda info: info.splits[split].num_examples
         sample_parser = _TFDSImageDetectionSampleParser(
-            bounding_box_field="bbox", normalized=False,
+            bounding_box_field="bbox", normalized=True,
         )
         return _download_and_prepare(
             dataset_dir,
@@ -433,7 +434,7 @@ class COCO2017Dataset(TFDSDataset):
         ].names
         get_num_samples_fcn = lambda info: info.splits[split].num_examples
         sample_parser = _TFDSImageDetectionSampleParser(
-            bounding_box_field="bbox", normalized=False,
+            bounding_box_field="bbox", normalized=True,
         )
         return _download_and_prepare(
             dataset_dir,
@@ -623,53 +624,52 @@ class _TFDSImageClassificationSampleParser(
     foud.ImageClassificationSampleParser
 ):
     def __init__(self, image_field="image", label_field="label", **kwargs):
-        super(_TFDSImageClassificationSampleParser, self).__init__(**kwargs)
+        super().__init__(**kwargs)
         self.image_field = image_field
         self.label_field = label_field
 
-    def parse_image(self, sample):
-        img = sample[self.image_field]
-        return super(_TFDSImageClassificationSampleParser, self).parse_image(
-            (img, None)
-        )
+    def _get_image(self):
+        img = self.current_sample[self.image_field]
+        return self._parse_image(img)
 
-    def parse_label(self, sample):
-        target = sample[self.label_field]
-        return super(_TFDSImageClassificationSampleParser, self).parse_label(
-            (None, target)
-        )
+    def get_label(self):
+        try:
+            target = self.current_sample[self.label_field]
+        except:
+            return None
+
+        return self._parse_label(target)
 
 
 class _TFDSImageDetectionSampleParser(foud.ImageDetectionSampleParser):
     def __init__(self, image_field="image", objects_field="objects", **kwargs):
-        super(_TFDSImageDetectionSampleParser, self).__init__(**kwargs)
+        super().__init__(**kwargs)
         self.image_field = image_field
         self.objects_field = objects_field
 
-    def parse_image(self, sample):
-        img = sample[self.image_field]
+    def _get_image(self):
+        img = self.current_sample[self.image_field]
         return self._parse_image(img)
 
-    def parse_label(self, sample):
-        target = sample[self.objects_field]
+    def get_label(self):
+        try:
+            target = self.current_sample[self.objects_field]
+        except:
+            return None
 
         if not self.normalized:
             # Absolute bounding box coordinates were provided, so we must have
             # the image to convert to relative coordinates
-            img = self._parse_image(sample[self.image_field])
+            img = self._current_image
         else:
             img = None
 
         return self._parse_label(target, img=img)
 
-    def parse(self, sample):
-        img = sample[self.image_field]
-        img = self._parse_image(img)
-        target = sample[self.objects_field]
-        label = self._parse_label(target, img=img)
-        return img, label
-
     def _parse_label(self, target, img=None):
+        if target is None:
+            return None
+
         # Convert from dict-of-lists to list-of-dicts
         target = [
             {self.bounding_box_field: bbox, self.label_field: label}
@@ -678,9 +678,15 @@ class _TFDSImageDetectionSampleParser(foud.ImageDetectionSampleParser):
             )
         ]
 
-        return super(_TFDSImageDetectionSampleParser, self)._parse_label(
-            target, img=img
-        )
+        return super()._parse_label(target, img=img)
+
+    def _parse_bbox(self, obj):
+        # Format reference:
+        # www.tensorflow.org/datasets/api_docs/python/tfds/features/BBoxFeature
+        ymin, xmin, ymax, xmax = obj[self.bounding_box_field]
+        w = xmax - xmin
+        h = ymax - ymin
+        return xmin, ymin, w, h
 
 
 def _download_and_prepare(
@@ -705,16 +711,20 @@ def _download_and_prepare(
     sample_parser.classes = classes
 
     if isinstance(sample_parser, foud.ImageClassificationSampleParser):
-        write_dataset_fcn = foud.to_image_classification_dataset
-        dataset_type = fot.ImageClassificationDataset()
+        dataset_type = fot.FiftyOneImageClassificationDataset()
+        dataset_exporter = foud.FiftyOneImageClassificationDatasetExporter(
+            dataset_dir, classes=classes
+        )
     elif isinstance(sample_parser, foud.ImageDetectionSampleParser):
-        write_dataset_fcn = foud.to_image_detection_dataset
-        dataset_type = fot.ImageDetectionDataset()
+        dataset_type = fot.FiftyOneImageDetectionDataset()
+        dataset_exporter = foud.FiftyOneImageDetectionDatasetExporter(
+            dataset_dir, classes=classes
+        )
     elif isinstance(sample_parser, foud.ImageLabelsSampleParser):
-        write_dataset_fcn = foud.to_image_labels_dataset
-        dataset_type = fot.ImageLabelsDataset()
+        dataset_type = fot.FiftyOneImageLabelsDataset()
+        dataset_exporter = foud.FiftyOneImageLabelsDatasetExporter(dataset_dir)
     else:
-        raise ValueError("Unsupported sample parser: %s" % sample_parser)
+        raise ValueError("Unsupported SampleParser %s" % type(sample_parser))
 
     try:
         samples = dataset.as_numpy_iterator()
@@ -723,10 +733,10 @@ def _download_and_prepare(
         samples = tfds.as_numpy(dataset)
 
     # Write the formatted dataset to `dataset_dir`
-    write_dataset_fcn(
+    foud.write_dataset(
         samples,
-        dataset_dir,
-        sample_parser=sample_parser,
+        sample_parser,
+        dataset_exporter=dataset_exporter,
         num_samples=num_samples,
     )
 

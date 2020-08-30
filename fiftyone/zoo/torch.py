@@ -5,19 +5,6 @@ FiftyOne Zoo Datasets provided by ``torchvision.datasets``.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
-# pragma pylint: disable=redefined-builtin
-# pragma pylint: disable=unused-wildcard-import
-# pragma pylint: disable=wildcard-import
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
-from builtins import *
-
-# pragma pylint: enable=redefined-builtin
-# pragma pylint: enable=unused-wildcard-import
-# pragma pylint: enable=wildcard-import
-
 import fiftyone.core.utils as fou
 import fiftyone.types as fot
 import fiftyone.utils.coco as fouc
@@ -26,7 +13,21 @@ import fiftyone.utils.imagenet as foui
 import fiftyone.utils.voc as fouv
 import fiftyone.zoo as foz
 
-torchvision = fou.lazy_import("torchvision", fou.ensure_torch)
+
+_TORCH_IMPORT_ERROR = """
+
+You tried to download a dataset from the FiftyOne Dataset Zoo using the PyTorch
+backend, but you do not have the necessary packages installed.
+
+Ensure that you have `torch` and `torchvision` installed on your machine, and
+then try running this command again.
+
+See https://voxel51.com/docs/fiftyone/user_guide/dataset_creation/zoo.html
+for more information about working with the Dataset Zoo.
+"""
+
+_callback = lambda: fou.ensure_torch(error_msg=_TORCH_IMPORT_ERROR)
+torchvision = fou.lazy_import("torchvision", callback=_callback)
 
 
 class TorchVisionDataset(foz.ZooDataset):
@@ -483,22 +484,26 @@ def _download_and_prepare(
     sample_parser.classes = classes
 
     if isinstance(sample_parser, foud.ImageClassificationSampleParser):
-        write_dataset_fcn = foud.to_image_classification_dataset
-        dataset_type = fot.ImageClassificationDataset()
+        dataset_type = fot.FiftyOneImageClassificationDataset()
+        dataset_exporter = foud.FiftyOneImageClassificationDatasetExporter(
+            dataset_dir, classes=classes
+        )
     elif isinstance(sample_parser, foud.ImageDetectionSampleParser):
-        write_dataset_fcn = foud.to_image_detection_dataset
-        dataset_type = fot.ImageDetectionDataset()
+        dataset_type = fot.FiftyOneImageDetectionDataset()
+        dataset_exporter = foud.FiftyOneImageDetectionDatasetExporter(
+            dataset_dir, classes=classes
+        )
     elif isinstance(sample_parser, foud.ImageLabelsSampleParser):
-        write_dataset_fcn = foud.to_image_labels_dataset
-        dataset_type = fot.ImageLabelsDataset()
+        dataset_type = fot.FiftyOneImageLabelsDataset()
+        dataset_exporter = foud.FiftyOneImageLabelsDatasetExporter(dataset_dir)
     else:
-        raise ValueError("Unsupported sample parser: %s" % sample_parser)
+        raise ValueError("Unsupported SampleParser %s" % type(sample_parser))
 
     # Write the formatted dataset to `dataset_dir`
-    write_dataset_fcn(
+    foud.write_dataset(
         dataset,
-        dataset_dir,
-        sample_parser=sample_parser,
+        sample_parser,
+        dataset_exporter=dataset_exporter,
         num_samples=num_samples,
     )
 
@@ -510,7 +515,12 @@ def _parse_voc_detection_labels(_):
 
 
 def _parse_coco_detection_labels_map(dataset):
-    return fouc.coco_categories_to_classes(dataset.coco.dataset["categories"])
+    try:
+        return fouc.coco_categories_to_classes(
+            dataset.coco.dataset["categories"]
+        )
+    except:
+        return None
 
 
 def _parse_classification_labels(dataset):

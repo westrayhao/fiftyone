@@ -5,20 +5,8 @@ Session class for interacting with the FiftyOne App.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
-# pragma pylint: disable=redefined-builtin
-# pragma pylint: disable=unused-wildcard-import
-# pragma pylint: disable=wildcard-import
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
-from builtins import *
-
-# pragma pylint: enable=redefined-builtin
-# pragma pylint: enable=unused-wildcard-import
-# pragma pylint: enable=wildcard-import
-
 import logging
+from collections import defaultdict
 
 import fiftyone.core.client as foc
 import fiftyone.core.service as fos
@@ -27,8 +15,22 @@ from fiftyone.core.state import StateDescription
 
 logger = logging.getLogger(__name__)
 
-# Global session singleton
-session = None
+#
+# Session globals
+#
+# _session is the proxy `Session` for `launch_app()` and `close_app()` calls
+# _server_services maintains active servers
+# _subscribed_sessions maintains sessions subscribed to an active server
+#
+# Both maps use port as the key, so the main python process is always aware
+# of what servers can be killed
+#
+# Note that a server process is killed via deletion of its
+# `fiftyone.core.service.ServerService` instance
+#
+_session = None
+_server_services = {}
+_subscribed_sessions = defaultdict(set)
 
 
 def launch_app(dataset=None, view=None, port=5151, remote=False):
@@ -48,7 +50,7 @@ def launch_app(dataset=None, view=None, port=5151, remote=False):
     Returns:
         a :class:`Session`
     """
-    global session  # pylint: disable=global-statement
+    global _session  # pylint: disable=global-statement
     #
     # Note, we always `close_app()` here rather than just calling
     # `session.open()` if a session already exists, because the app may have
@@ -61,20 +63,19 @@ def launch_app(dataset=None, view=None, port=5151, remote=False):
     #
     close_app()
 
-    session = Session(dataset=dataset, view=view, port=port, remote=remote)
+    _session = Session(dataset=dataset, view=view, port=port, remote=remote)
 
-    return session
+    return _session
 
 
 def close_app():
     """Closes the FiftyOne App, if necessary.
     If no app is currently open, this method has no effect.
     """
-    global session  # pylint: disable=global-statement
-
-    if session is not None:
-        session.close()
-        session = None
+    global _session  # pylint: disable=global-statement
+    if _session is not None:
+        _session.close()
+        _session = None
 
 
 def _update_state(func):
@@ -102,6 +103,9 @@ class Session(foc.HasClient):
         :attr:`Session.view` property of the session to your
         :class:`fiftyone.core.view.DatasetView`.
 
+    -   Use :meth:`Session.refresh` to refresh the App if you update a dataset
+        outside of the App
+
     -   Use :attr:`Session.selected` to retrieve the IDs of the currently
         selected samples in the app.
 
@@ -119,9 +123,9 @@ class Session(foc.HasClient):
             load
         view (None): an optional :class:`fiftyone.core.view.DatasetView` to
             load
-        port (5151): the port to use to connect the FiftyOne app.
+        port (5151): the port to use to connect the FiftyOne App
         remote (False): whether this is a remote session. Remote sessions do
-            not launch the FiftyOne app
+            not launch the FiftyOne App
     """
 
     _HC_NAMESPACE = "state"
@@ -129,16 +133,16 @@ class Session(foc.HasClient):
     _HC_ATTR_TYPE = StateDescription
 
     def __init__(self, dataset=None, view=None, port=5151, remote=False):
-        if session is not None:
-            raise ValueError("Only one session is permitted")
-
-        self._close = False
-        self._dataset = None
-        self._view = None
         self._port = port
         self._remote = remote
+        global _server_services  # pylint: disable=global-statement
+        if port not in _server_services:
+            _server_services[port] = fos.ServerService(port)
 
-        super(Session, self).__init__(self._port)
+        global _subscribed_sessions  # pylint: disable=global-statement
+        _subscribed_sessions[port].add(self)
+
+        super().__init__(self._port)
 
         if view is not None:
             self.view = view
@@ -146,7 +150,7 @@ class Session(foc.HasClient):
             self.dataset = dataset
 
         if not self._remote:
-            self._app_service = fos.AppService()
+            self._app_service = fos.AppService(server_port=port)
             logger.info("App launched")
         else:
             logger.info(
@@ -154,20 +158,39 @@ class Session(foc.HasClient):
                 % (self.server_port, self.server_port, self.server_port)
             )
 
+    def __del__(self):
+        """Deletes the Session by removing it from the `_subscribed_sessions`
+        global and deleting (stopping) the associated
+        :class:`fiftyone.core.service.ServerService` if no other sessions are
+        subscribed.
+        """
+        try:
+            global _subscribed_sessions  # pylint: disable=global-statement
+            _subscribed_sessions[self._port].discard(self)
+
+            if len(_subscribed_sessions[self._port]) == 0:
+                global _server_services  # pylint: disable=global-statement
+                if self._port in _server_services:
+                    service = _server_services.pop(self._port)
+                    service.stop()
+        except:
+            # e.g. globals were already garbage-collected
+            pass
+
     @property
     def dataset(self):
         """The :class:`fiftyone.core.dataset.Dataset` connected to the session.
         """
-        if self.view is not None:
-            return self.view._dataset
+        if self.state.view is not None:
+            return self.state.view._dataset
 
-        return self._dataset
+        return self.state.dataset
 
     @dataset.setter
     @_update_state
     def dataset(self, dataset):
-        self._dataset = dataset
-        self._view = None
+        self.state.dataset = dataset
+        self.state.view = None
         self.state.selected = []
 
     @_update_state
@@ -175,21 +198,27 @@ class Session(foc.HasClient):
         """Clears the current :class:`fiftyone.core.dataset.Dataset` from the
         session, if any.
         """
-        self.dataset = None
+        self.state.dataset = None
+
+    @property
+    def server_port(self):
+        """Getter for the port number of the session.
+        """
+        return self._port
 
     @property
     def view(self):
         """The :class:`fiftyone.core.view.DatasetView` connected to the
         session, or ``None`` if no view is connected.
         """
-        return self._view
+        return self.state.view
 
     @view.setter
     @_update_state
     def view(self, view):
-        self._view = view
+        self.state.view = view
         if view is not None:
-            self._dataset = self._view._dataset
+            self.state.dataset = self.state.view._dataset
 
         self.state.selected = []
 
@@ -198,14 +227,20 @@ class Session(foc.HasClient):
         """Clears the current :class:`fiftyone.core.view.DatasetView` from the
         session, if any.
         """
-        self.view = None
+        self.state.view = None
 
     @property
     def selected(self):
         """A list of sample IDs of the currently selected samples in the
-        FiftyOne app.
+        FiftyOne App.
         """
         return list(self.state.selected)
+
+    @_update_state
+    def refresh(self):
+        """Refreshes the FiftyOne App, reloading the current dataset/view."""
+        # @todo achieve same behavoir as if CTRL + R were pressed in the App
+        pass
 
     def open(self):
         """Opens the session.
@@ -213,7 +248,7 @@ class Session(foc.HasClient):
         This opens the FiftyOne App, if necessary.
         """
         if self._remote:
-            raise ValueError("Remote sessions cannot launch the FiftyOne app")
+            raise ValueError("Remote sessions cannot launch the FiftyOne App")
 
         self._app_service.start()
 
@@ -225,11 +260,14 @@ class Session(foc.HasClient):
         if self._remote:
             return
 
-        self._close = True
+        self.state.close = True
         self._update_state()
 
     def wait(self):
-        """Waits for the session to be closed by the user."""
+        """Waits for the FiftyOne App to be closed by the user.
+
+        This requires a local (not remote) session.
+        """
         if self._remote:
             raise ValueError("Cannot `wait()` for remote sessions to close")
 
@@ -238,13 +276,8 @@ class Session(foc.HasClient):
     # PRIVATE #################################################################
 
     def _update_state(self):
-        # pylint: disable=attribute-defined-outside-init
-        self.state = StateDescription(
-            close=self._close,
-            dataset=self._dataset,
-            view=self._view,
-            selected=self.state.selected,
-        )
+        # see fiftyone.core.client if you would like to understand this
+        self.state = self.state
 
 
 _REMOTE_INSTRUCTIONS = """

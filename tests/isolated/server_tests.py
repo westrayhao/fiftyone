@@ -1,13 +1,11 @@
 """
-ServerService tests
+ServerService tests.
 
-To run a single test, modify the main code to:
+To run a single test, modify the main code to::
 
-```
-singletest = unittest.TestSuite()
-singletest.addTest(TESTCASE("<TEST METHOD NAME>"))
-unittest.TextTestRunner().run(singletest)
-```
+    singletest = unittest.TestSuite()
+    singletest.addTest(TESTCASE("<TEST METHOD NAME>"))
+    unittest.TextTestRunner().run(singletest)
 
 | Copyright 2017-2020, Voxel51, Inc.
 | `voxel51.com <https://voxel51.com/>`_
@@ -19,7 +17,6 @@ import time
 import unittest
 import urllib
 
-from retrying import retry
 import socketio
 
 import eta.core.utils as etau
@@ -27,10 +24,12 @@ import eta.core.utils as etau
 import fiftyone as fo
 from fiftyone.constants import SERVER_ADDR
 import fiftyone.core.client as foc
-import fiftyone.core.odm as foo
-import fiftyone.core.service as fos
-from fiftyone.core.session import Session
-from fiftyone.core.state import StateDescription
+from fiftyone.core.session import (
+    Session,
+    _server_services,
+    _subscribed_sessions,
+)
+from fiftyone.core.state import StateDescriptionWithDerivables
 
 
 class AppClient(foc.BaseClient):
@@ -38,7 +37,9 @@ class AppClient(foc.BaseClient):
 
     def __init__(self):
         self.response = None
-        super(AppClient, self).__init__("/state", StateDescription)
+        super(AppClient, self).__init__(
+            "/state", StateDescriptionWithDerivables
+        )
 
     def on_update(self, data):
         super(AppClient, self).on_update(data)
@@ -46,7 +47,17 @@ class AppClient(foc.BaseClient):
 
 
 def _serialize(state):
-    return StateDescription.from_dict(state.serialize()).serialize()
+    return StateDescriptionWithDerivables.from_dict(
+        state.serialize()
+    ).serialize()
+
+
+def _normalize_session(session):
+    # convert from OrderedDict to dict, recursively
+    session = json.loads(json.dumps(session))
+    if isinstance(session.get("view", {}).get("view"), str):
+        session["view"]["view"] = json.loads(session["view"]["view"])
+    return session
 
 
 class ServerServiceTests(unittest.TestCase):
@@ -75,6 +86,12 @@ class ServerServiceTests(unittest.TestCase):
         cls.sample1["scalar"] = 1
         cls.sample1["label"] = fo.Classification(label="test")
         cls.sample1.tags.append("tag")
+        cls.sample1["floats"] = [
+            0.5,
+            float("nan"),
+            float("inf"),
+            float("-inf"),
+        ]
         cls.sample1.save()
 
     @classmethod
@@ -91,17 +108,28 @@ class ServerServiceTests(unittest.TestCase):
         self.wait_for_response()
         session = _serialize(self.session.state)
         client = self.client.data.serialize()
-        self.assertEqual(session, client)
+        self.assertEqual(
+            _normalize_session(session), _normalize_session(client)
+        )
 
     def step_get_current_state(self):
-        self.session.view = self.dataset.view().limit(1)
+        self.maxDiff = None
+        self.session.view = self.dataset.limit(1)
         self.wait_for_response()
         session = _serialize(self.session.state)
         self.client.emit(
             "get_current_state", "", callback=self.client_callback
         )
         client = self.wait_for_response()
-        self.assertEqual(session, client)
+        self.assertEqual(
+            _normalize_session(session), _normalize_session(client)
+        )
+        self.assertEqual(
+            sorted(client["derivables"]["tags"]),
+            sorted(self.dataset.get_tags()),
+        )
+        self.assertEqual(client["count"], len(self.session.view))
+        self.assertNotEqual(client["count"], len(self.dataset))
 
     def step_selection(self):
         self.client.emit("add_selection", self.sample1.id)
@@ -118,22 +146,11 @@ class ServerServiceTests(unittest.TestCase):
         self.wait_for_response()
         self.client.emit("page", 1, callback=self.client_callback)
         client = self.wait_for_response()
-        self.assertIs(len(client["results"]), 2)
-
-    def step_lengths(self):
-        self.session.dataset = self.dataset
-        self.wait_for_response()
-        labels = self.dataset.view().get_label_fields()
-        tags = self.dataset.view().get_tags()
-
-        self.client.emit("lengths", "", callback=self.client_callback)
-        client = self.wait_for_response()
-
-        def sort(l):
-            return sorted(l, key=lambda f: f["_id"]["field"])
-
-        self.assertEqual(sort(client["labels"]), sort(labels))
-        self.assertEqual(client["tags"], tags)
+        results = client["results"]
+        self.assertIs(len(results), 2)
+        # this will raise an error if special floats exist that are not JSON
+        # compliant
+        json.dumps(results, allow_nan=False)
 
     def step_get_distributions(self):
         self.session.dataset = self.dataset
@@ -159,6 +176,30 @@ class ServerServiceTests(unittest.TestCase):
         client = self.wait_for_response()
         self.assertIs(len(client), 1)
         self.assertEqual(client[0]["data"], [{"key": "null", "count": 2}])
+
+    def step_sessions(self):
+        other_session = Session(remote=True)
+        other_session.dataset = self.dataset
+        self.wait_for_response(session=True)
+        self.assertEqual(str(self.session.dataset), str(other_session.dataset))
+        other_session.view = self.dataset.limit(1)
+        self.wait_for_response(session=True)
+        self.assertEqual(str(self.session.view), str(other_session.view))
+
+    def step_server_services(self):
+        port = 5252
+        session_one = Session(port=port, remote=True)
+        session_two = Session(port=port, remote=True)
+        self.assertEqual(len(_subscribed_sessions[port]), 2)
+        self.assertEqual(len(_subscribed_sessions), 2)
+        self.assertEqual(len(_server_services), 2)
+        session_two.__del__()
+        self.assertEqual(len(_subscribed_sessions[port]), 1)
+        self.assertEqual(len(_subscribed_sessions), 2)
+        self.assertEqual(len(_server_services), 2)
+        session_one.__del__()
+        self.assertEqual(len(_subscribed_sessions[port]), 0)
+        self.assertEqual(len(_server_services), 1)
 
     def test_steps(self):
         for name, step in self.steps():

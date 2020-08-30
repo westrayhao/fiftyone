@@ -5,19 +5,6 @@ Web socket client mixins.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
-# pragma pylint: disable=redefined-builtin
-# pragma pylint: disable=unused-wildcard-import
-# pragma pylint: disable=wildcard-import
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
-from builtins import *
-
-# pragma pylint: enable=redefined-builtin
-# pragma pylint: enable=unused-wildcard-import
-# pragma pylint: enable=wildcard-import
-
 import logging
 import signal
 import threading
@@ -26,7 +13,6 @@ from retrying import retry
 import socketio
 
 import fiftyone.constants as foc
-import fiftyone.core.service as fos
 
 logging.getLogger("socketio").setLevel(logging.ERROR)
 logging.getLogger("engineio").setLevel(logging.ERROR)
@@ -55,7 +41,7 @@ class BaseClient(socketio.ClientNamespace):
         self.data = data_cls()
         self.connected = False
         self.updated = False
-        super(BaseClient, self).__init__(namespace)
+        super().__init__(namespace)
         # disable socketio's interrupt handler because it closes the connection
         # on ctrl-c in interactive sessions
         signal.signal(signal.SIGINT, signal.default_int_handler)
@@ -84,7 +70,7 @@ class BaseClient(socketio.ClientNamespace):
             data: the new data
         """
         self.data = data
-        self.emit("update", data.serialize())
+        self.emit("update", {"data": data.serialize(), "include_self": False})
 
 
 @retry(wait_fixed=500, stop_max_delay=5000)
@@ -110,7 +96,6 @@ class HasClient(object):
     _HC_ATTR_TYPE = None
 
     def __init__(self, port):
-        self._server_service = fos.ServerService(port)
         self._hc_sio = socketio.Client()
         # the following is a monkey patch to set threads to daemon mode
         self._hc_sio.eio.start_background_task = _start_background_task
@@ -139,14 +124,7 @@ class HasClient(object):
                 )
             self._hc_client.update(value)
         else:
-            super(HasClient, self).__setattr__(name, value)
-
-    @property
-    def server_port(self):
-        """Getter for the port number the :class:`ServerService` is listening
-        on.
-        """
-        return self._server_service.port
+            super().__setattr__(name, value)
 
 
 def _start_background_task(target, *args, **kwargs):

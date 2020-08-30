@@ -7,14 +7,24 @@ Core utilities.
 """
 import atexit
 from base64 import b64encode, b64decode
+from collections import defaultdict
 import importlib
 import io
 import itertools
 import logging
+import os
 import signal
-import sys
 import types
 import zlib
+
+try:
+    import pprintpp as _pprint
+
+    # Monkey patch to prevent sorting keys
+    # https://stackoverflow.com/a/25688431
+    _pprint._sorted = lambda x: x
+except:
+    import pprint as _pprint
 
 import numpy as np
 import packaging.version
@@ -28,46 +38,125 @@ import fiftyone as fo
 logger = logging.getLogger(__name__)
 
 
-def ensure_tf():
+def pprint(obj, stream=None, indent=4, width=80, depth=None):
+    """Pretty-prints the Python object.
+
+    Args:
+        obj: the Python object
+        stream (None): the stream to write to. The default is ``sys.stdout``
+        indent (4): the number of spaces to use when indenting
+        width (80): the max width of each line in the pretty representation
+        depth (None): the maximum depth at which to pretty render nested dicts
+    """
+    return _pprint.pprint(
+        obj, stream=stream, indent=indent, width=width, depth=depth
+    )
+
+
+def pformat(obj, indent=4, width=80, depth=None):
+    """Returns a pretty string representation of the Python object.
+
+    Args:
+        obj: the Python object
+        indent (4): the number of spaces to use when indenting
+        width (80): the max width of each line in the pretty representation
+        depth (None): the maximum depth at which to pretty render nested dicts
+
+    Returns:
+        the pretty-formatted string
+    """
+    return _pprint.pformat(obj, indent=indent, width=width, depth=depth)
+
+
+def indent_lines(s, indent=4, skip=0):
+    """Indents the lines in the given string.
+
+    Args:
+        s: the string
+        indent (4): the number of spaces to indent
+        skip (0): the number of lines to skip before indenting
+
+    Returns:
+        the indented string
+    """
+    lines = s.split("\n")
+
+    skipped_lines = lines[:skip]
+    if skipped_lines:
+        skipped = "\n".join(skipped_lines)
+    else:
+        skipped = None
+
+    indent_lines = lines[skip:]
+    if indent_lines:
+        indented = "\n".join((" " * indent) + l for l in indent_lines)
+    else:
+        indented = None
+
+    if skipped is not None and indented is not None:
+        return skipped + "\n" + indented
+
+    if skipped is not None:
+        return skipped
+
+    if indented is not None:
+        return indented
+
+    return s
+
+
+def ensure_tf(error_msg=None):
     """Verifies that TensorFlow is installed on the host machine.
+
+    Args:
+        error_msg (None): an optional custom error message to print
 
     Raises:
         ImportError: if ``tensorflow`` could not be imported
     """
-    _ensure_package("tensorflow")
+    _ensure_package("tensorflow", error_msg=error_msg)
 
 
-def ensure_tfds():
+def ensure_tfds(error_msg=None):
     """Verifies that the ``tensorflow_datasets`` package is installed on the
     host machine.
+
+    Args:
+        error_msg (None): an optional custom error message to print
 
     Raises:
         ImportError: if ``tensorflow_datasets`` could not be imported
     """
-    _ensure_package("tensorflow", min_version="1.15")
-    _ensure_package("tensorflow_datasets")
+    _ensure_package("tensorflow", min_version="1.15", error_msg=error_msg)
+    _ensure_package("tensorflow_datasets", error_msg=error_msg)
 
 
-def ensure_torch():
+def ensure_torch(error_msg=None):
     """Verifies that PyTorch is installed on the host machine.
+
+    Args:
+        error_msg (None): an optional custom error message to print
 
     Raises:
         ImportError: if ``torch`` or ``torchvision`` could not be imported
     """
-    _ensure_package("torch")
-    _ensure_package("torchvision")
+    _ensure_package("torch", error_msg=error_msg)
+    _ensure_package("torchvision", error_msg=error_msg)
 
 
-def ensure_pycocotools():
+def ensure_pycocotools(error_msg=None):
     """Verifies that pycocotools is installed on the host machine.
+
+    Args:
+        error_msg (None): an optional custom error message to print
 
     Raises:
         ImportError: if ``pycocotools`` could not be imported
     """
-    _ensure_package("pycocotools")
+    _ensure_package("pycocotools", error_msg=error_msg)
 
 
-def _ensure_package(package_name, min_version=None):
+def _ensure_package(package_name, min_version=None, error_msg=None):
     has_min_ver = min_version is not None
 
     if has_min_ver:
@@ -80,6 +169,9 @@ def _ensure_package(package_name, min_version=None):
             pkg_str = "%s>=%s" % (package_name, min_version)
         else:
             pkg_str = package_name
+
+        if error_msg is not None:
+            raise ImportError(error_msg) from e
 
         raise ImportError(
             "The requested operation requires that '%s' is installed on your "
@@ -134,7 +226,7 @@ class LazyModule(types.ModuleType):
     """
 
     def __init__(self, module_name, callback=None):
-        super(LazyModule, self).__init__(module_name)
+        super().__init__(module_name)
         self._module = None
         self._callback = callback
 
@@ -283,9 +375,83 @@ class ResourceLimit(object):
 class ProgressBar(etau.ProgressBar):
     def __init__(self, *args, **kwargs):
         quiet = not fo.config.show_progress_bars
-        super(ProgressBar, self).__init__(
-            *args, iters_str="samples", quiet=quiet, **kwargs
+        super().__init__(*args, iters_str="samples", quiet=quiet, **kwargs)
+
+
+class UniqueFilenameMaker(object):
+    """A class that generates unique output paths in a directory.
+
+    This class provides a :meth:`get_output_path` method that generates unique
+    filenames in the specified output directory.
+
+    If an input filename is provided, the filename is maintained, unless a
+    name conflict in ``output_dir`` would occur, in which case an index of the
+    form ``"-%d" % count`` is appended to the base filename.
+
+    If no input filename is provided, an output filename of the form
+    ``<output_dir>/<count><default_ext>`` is generated, where ``count`` is the
+    number of files in ``output_dir``.
+
+    If no ``output_dir`` is provided, then unique filenames with no base
+    directory are generated.
+
+    Args:
+        output_dir (""): the directory in which to generate output paths
+        default_ext (""): the file extension to use when generating default
+            output paths
+        ignore_exts (False): whether to omit file extensions when checking for
+            duplicate filenames
+    """
+
+    def __init__(self, output_dir="", default_ext="", ignore_exts=False):
+        self.output_dir = output_dir
+        self.default_ext = default_ext
+        self.ignore_exts = ignore_exts
+
+        self._filename_counts = defaultdict(int)
+        self._default_filename_patt = (
+            fo.config.default_sequence_idx + default_ext
         )
+        self._idx = 0
+
+        if output_dir:
+            etau.ensure_dir(output_dir)
+            filenames = etau.list_files(output_dir)
+            self._idx = len(filenames)
+            for filename in filenames:
+                self._filename_counts[filename] += 1
+
+    def get_output_path(self, input_path=None, output_ext=None):
+        """Returns a unique output path.
+
+        Args:
+            input_path (None): an input path from which to derive the output
+                path
+            output_ext (None): an optional output extension to use
+
+        Returns:
+            the output path
+        """
+        self._idx += 1
+
+        if not input_path:
+            input_path = self._default_filename_patt % self._idx
+
+        filename = os.path.basename(input_path)
+        name, ext = os.path.splitext(filename)
+
+        if output_ext is not None:
+            ext = output_ext
+            filename = name + ext
+
+        key = name if self.ignore_exts else filename
+        self._filename_counts[key] += 1
+
+        count = self._filename_counts[key]
+        if count > 1:
+            filename = name + ("-%d" % count) + ext
+
+        return os.path.join(self.output_dir, filename)
 
 
 def compute_filehash(filepath):

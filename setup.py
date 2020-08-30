@@ -13,20 +13,18 @@ from wheel.bdist_wheel import bdist_wheel
 class BdistWheelCustom(bdist_wheel):
     def finalize_options(self):
         bdist_wheel.finalize_options(self)
-        # pure Python, so build a wheel for any Python version
-        self.universal = True
         # make just the wheel require these packages, since they aren't needed
         # for a development installation
         self.distribution.install_requires += [
-            "fiftyone-brain>=0.1.4",
-            "fiftyone-gui>=0.2.0",
-            "fiftyone-db>=0.1.1",
+            "fiftyone-brain>=0.1.8,<0.2",
+            "fiftyone-gui>=0.5.2,<0.6",
+            "fiftyone-db>=0.1.1,<0.2",
         ]
 
 
 setup(
     name="fiftyone",
-    version="0.3.0",
+    version="0.5.2",
     description=(
         "FiftyOne: a powerful package for dataset curation, analysis, and "
         "visualization"
@@ -34,7 +32,7 @@ setup(
     author="Voxel51, Inc.",
     author_email="info@voxel51.com",
     url="https://github.com/voxel51/fiftyone",
-    license="",
+    license="Apache",
     packages=find_packages() + ["fiftyone.recipes", "fiftyone.tutorials"],
     package_dir={
         "fiftyone.recipes": "docs/source/recipes",
@@ -46,6 +44,7 @@ setup(
         "argcomplete",
         "eventlet",
         "Flask",
+        "Flask-Cors",
         "flask-socketio",
         "future",
         "Jinja2",
@@ -56,24 +55,23 @@ setup(
         "pprintpp",
         "psutil",
         "pymongo",
-        "python-engineio[client]<3.12;python_version<'3'",
-        "python-engineio[client];python_version>='3'",
-        "python-socketio[client]<4.5;python_version<'3'",
-        "python-socketio[client];python_version>='3'",
+        "python-engineio[client]",
+        "python-socketio[client]",
         "retrying",
         "setuptools",
         "tabulate",
         "xmltodict",
         # internal packages
-        "voxel51-eta>=0.1.1",
+        "voxel51-eta>=0.1.5,<0.2",
     ],
     classifiers=[
         "Operating System :: MacOS :: MacOS X",
         "Operating System :: POSIX :: Linux",
-        "Programming Language :: Python :: 2.7",
+        "Operating System :: Microsoft :: Windows",
         "Programming Language :: Python :: 3",
+        "License :: OSI Approved :: Apache Software License",
     ],
     entry_points={"console_scripts": ["fiftyone=fiftyone.core.cli:main"]},
-    python_requires=">=2.7",
+    python_requires=">=3.5",
     cmdclass={"bdist_wheel": BdistWheelCustom},
 )

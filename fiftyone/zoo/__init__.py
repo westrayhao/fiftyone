@@ -8,20 +8,6 @@ download via FiftyOne.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
-# pragma pylint: disable=redefined-builtin
-# pragma pylint: disable=unused-wildcard-import
-# pragma pylint: disable=wildcard-import
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
-from builtins import *
-from future.utils import iteritems, itervalues
-
-# pragma pylint: enable=redefined-builtin
-# pragma pylint: enable=unused-wildcard-import
-# pragma pylint: enable=wildcard-import
-
 import logging
 import os
 
@@ -30,7 +16,6 @@ import eta.core.utils as etau
 
 import fiftyone as fo
 import fiftyone.core.dataset as fod
-import fiftyone.types as fot
 
 
 logger = logging.getLogger(__name__)
@@ -47,7 +32,8 @@ def list_zoo_datasets():
         a list of dataset names
     """
     datasets = set()
-    for d in itervalues(_get_zoo_datasets()):
+    all_datasets = _get_zoo_datasets()
+    for d in all_datasets.values():
         datasets |= d.keys()
 
     return sorted(datasets)
@@ -109,8 +95,10 @@ def download_zoo_dataset(name, split=None, splits=None, dataset_dir=None):
             is used
 
     Returns:
-        info: the :class:`fiftyone.zoo.ZooDatasetInfo` for the dataset
-        dataset_dir: the directory containing the dataset
+        tuple of
+
+        -   info: the :class:`fiftyone.zoo.ZooDatasetInfo` for the dataset
+        -   dataset_dir: the directory containing the dataset
     """
     zoo_dataset, dataset_dir = _parse_dataset_details(name, dataset_dir)
     info = zoo_dataset.download_and_prepare(
@@ -123,6 +111,7 @@ def load_zoo_dataset(
     name,
     split=None,
     splits=None,
+    dataset_name=None,
     dataset_dir=None,
     download_if_necessary=True,
     drop_existing_dataset=False,
@@ -132,6 +121,10 @@ def load_zoo_dataset(
 
     By default, the dataset will be downloaded if it does not already exist in
     the specified directory.
+
+    If you do not specify a custom ``dataset_name`` and you have previously
+    loaded the same zoo dataset and split(s) into FiftyOne, the existing
+    :class:`fiftyone.core.dataset.Dataset` will be returned.
 
     Args:
         name: the name of the zoo dataset to load. Call
@@ -146,6 +139,9 @@ def load_zoo_dataset(
             ``splits`` are provided, all available splits are loaded. Consult
             the documentation for the :class:`ZooDataset` you specified to see
             the supported splits
+        dataset_name (None): an optional name to give the returned
+            :class:`fiftyone.core.dataset.Dataset`. By default, a name will be
+            constructed based on the dataset and split(s) you are loading
         dataset_dir (None): the directory in which the dataset is stored or
             will be downloaded. By default,
             :func:`fiftyone.core.dataset.get_default_dataset_dir` is used
@@ -168,15 +164,17 @@ def load_zoo_dataset(
         zoo_dataset, dataset_dir = _parse_dataset_details(name, dataset_dir)
         info = zoo_dataset.load_info(dataset_dir)
 
-    dataset_name = zoo_dataset.name
-    if splits is not None:
-        dataset_name += "-" + "-".join(splits)
+    if dataset_name is None:
+        dataset_name = zoo_dataset.name
+        if splits is not None:
+            dataset_name += "-" + "-".join(splits)
 
     if fo.dataset_exists(dataset_name):
         if not drop_existing_dataset:
             logger.info(
-                "Loading existing dataset '%s'. To reload from disk, first "
-                "delete the existing dataset",
+                "Loading existing dataset '%s'. To reload from disk, either "
+                "delete the existing dataset or provide a custom "
+                "`dataset_name` to use",
                 dataset_name,
             )
             return fo.load_dataset(dataset_name)
@@ -200,17 +198,25 @@ def load_zoo_dataset(
         logger.info("Loading '%s'", zoo_dataset.name)
         dataset.add_dir(dataset_dir, dataset_type)
 
+    if info.classes is not None:
+        dataset.info["classes"] = info.classes
+        dataset.save()
+
     return dataset
 
 
-def find_zoo_dataset(name):
+def find_zoo_dataset(name, split=None):
     """Returns the directory containing the given zoo dataset.
+
+    If a ``split`` is provided, the path to the dataset split is returned;
+    otherwise, the path to the root directory is returned.
 
     The dataset must be downloaded. Use :func:`download_zoo_dataset` to
     download datasets.
 
     Args:
         name: the name of the zoo dataset
+        split (None) a dataset split to locate
 
     Returns:
         the directory containing the dataset
@@ -220,6 +226,18 @@ def find_zoo_dataset(name):
         zoo_dataset.load_info(dataset_dir)
     except OSError:
         raise ValueError("Dataset '%s' is not downloaded" % name)
+
+    if split:
+        if not zoo_dataset.has_split(split):
+            raise ValueError("Dataset '%s' has no split '%s'" % (name, split))
+
+        info = zoo_dataset.load_info(dataset_dir)
+        if not info.is_split_downloaded(split):
+            raise ValueError(
+                "Dataset '%s' split '%s' is not downloaded" % (name, split)
+            )
+
+        return zoo_dataset.get_split_dir(dataset_dir, split)
 
     return dataset_dir
 
@@ -263,7 +281,8 @@ def get_zoo_dataset(name):
         the :class:`ZooDataset` instance
     """
     all_datasets = _get_zoo_datasets()
-    for source in _get_zoo_dataset_sources():
+    all_sources, _ = _get_zoo_dataset_sources()
+    for source in all_sources:
         if source not in all_datasets:
             continue
 
@@ -296,10 +315,12 @@ def _get_zoo_datasets():
     if __ZOO_DATASETS__ is None:
         from fiftyone.zoo.torch import AVAILABLE_DATASETS as TORCH_DATASETS
         from fiftyone.zoo.tf import AVAILABLE_DATASETS as TF_DATASETS
+        from fiftyone.zoo.base import AVAILABLE_DATASETS as BASE_DATASETS
 
         __ZOO_DATASETS__ = {
             "torch": TORCH_DATASETS,
             "tensorflow": TF_DATASETS,
+            "base": BASE_DATASETS,
         }
 
     return __ZOO_DATASETS__
@@ -312,9 +333,12 @@ def _get_zoo_dataset_sources():
 
     try:
         all_sources.remove(default_source)
-        return [default_source] + all_sources
+        all_sources = [default_source] + all_sources
+        has_default = True
     except ValueError:
-        return all_sources
+        has_default = False
+
+    return all_sources, has_default
 
 
 def _parse_dataset_details(name, dataset_dir):
@@ -331,8 +355,8 @@ class ZooDatasetInfo(etas.Serializable):
 
     Args:
         zoo_dataset: the :class:`ZooDataset` instance for the dataset
-        dataset_type: the dataset type, a subclass of
-            :class:`fiftyone.types.BaseDataset`
+        dataset_type: the :class:`fiftyone.types.dataset_types.Dataset` type of
+            the dataset
         num_samples: the total number of samples in all downloaded splits of
             the dataset
         downloaded_splits (None): a dict of :class:`ZooDatasetSplitInfo`
@@ -373,8 +397,8 @@ class ZooDatasetInfo(etas.Serializable):
 
     @property
     def dataset_type(self):
-        """The fully-qualified class string of the dataset type, a subclass of
-        :class:`fiftyone.types.BaseDataset`.
+        """The fully-qualified class string of the
+        :class:`fiftyone.types.dataset_types.Dataset` type.
         """
         return etau.get_class_name(self._dataset_type)
 
@@ -394,11 +418,11 @@ class ZooDatasetInfo(etas.Serializable):
         return self._zoo_dataset
 
     def get_dataset_type(self):
-        """Returns the dataset type instance for the dataset, a subclass of
-        :class:`fiftyone.types.BaseDataset`.
+        """Returns the :class:`fiftyone.types.dataset_types.Dataset` type
+        instance for the dataset.
 
         Returns:
-            a :class:`fiftyone.types.BaseDataset` instance
+            a :class:`fiftyone.types.dataset_types.Dataset` instance
         """
         return self._dataset_type
 
@@ -441,26 +465,32 @@ class ZooDatasetInfo(etas.Serializable):
             a :class:`ZooDatasetInfo`
         """
         try:
-            # Legacy naming
+            # @legacy field name
             zoo_dataset = d["zoo_dataset_cls"]
         except KeyError:
             zoo_dataset = d["zoo_dataset"]
 
-        zoo_dataset = etau.get_class(zoo_dataset)()
-
         try:
-            # Legacy naming
+            # @legacy field name
             dataset_type = d["format_cls"]
         except KeyError:
             dataset_type = d["dataset_type"]
 
+        # @legacy dataset types
+        _dt = "fiftyone.types.dataset_types"
+        if dataset_type.endswith(".ImageClassificationDataset"):
+            dataset_type = _dt + ".FiftyOneImageClassificationDataset"
+        if dataset_type.endswith(".ImageDetectionDataset"):
+            dataset_type = _dt + ".FiftyOneImageDetectionDataset"
+
+        zoo_dataset = etau.get_class(zoo_dataset)()
         dataset_type = etau.get_class(dataset_type)()
 
         downloaded_splits = d.get("downloaded_splits", None)
         if downloaded_splits is not None:
             downloaded_splits = {
                 k: ZooDatasetSplitInfo.from_dict(v)
-                for k, v in iteritems(downloaded_splits)
+                for k, v in downloaded_splits.items()
             }
 
         return cls(
@@ -645,11 +675,14 @@ class ZooDataset(object):
                         self, dataset_type, 0, classes=classes
                     )
 
+                if classes and not info.classes:
+                    info.classes = classes
+
                 info.downloaded_splits[split] = ZooDatasetSplitInfo(
                     split, num_samples
                 )
                 info.num_samples = sum(
-                    si.num_samples for si in itervalues(info.downloaded_splits)
+                    si.num_samples for si in info.downloaded_splits.values()
                 )
 
                 write_info = True
@@ -664,7 +697,7 @@ class ZooDataset(object):
                     classes,
                 ) = self._download_and_prepare(dataset_dir, scratch_dir, None)
 
-                # Create ZooDastasetInfo
+                # Create ZooDatasetInfo
                 info = ZooDatasetInfo(
                     self, dataset_type, num_samples, classes=classes
                 )
@@ -692,10 +725,12 @@ class ZooDataset(object):
                 not have splits
 
         Returns:
-            dataset_type: the dataset type, a subclass of
-                :class:`fiftyone.types.BaseDataset`
-            num_samples: the number of samples in the split
-            classes: an optional list of class label strings
+            tuple of
+
+            -   dataset_type: the :class:`fiftyone.types.dataset_types.Dataset`
+                    type of the dataset
+            -   num_samples: the number of samples in the split
+            -   classes: an optional list of class label strings
         """
         raise NotImplementedError(
             "subclasses must implement _download_and_prepare()"

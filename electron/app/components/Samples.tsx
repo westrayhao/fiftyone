@@ -1,16 +1,15 @@
-import _ from "lodash";
-import React, { createRef, useState, useRef, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import InfiniteScroll from "react-infinite-scroller";
+import { useSetRecoilState } from "recoil";
 import { Grid, Loader, Dimmer } from "semantic-ui-react";
-import uuid from "react-uuid";
 import Sample from "./Sample";
 import connect from "../utils/connect";
-import { wrap } from "comlink";
 import tile from "./Samples.hooks";
+import * as atoms from "../recoil/atoms";
 
 function Samples(props) {
-  const { displayProps, state, setView, port, dispatch } = props;
-  const initialSelected = state.selected.reduce((obj, id, i) => {
+  const { displayProps, state, setView, port } = props;
+  const initialSelected = state.selected.reduce((obj, id) => {
     return {
       ...obj,
       [id]: true,
@@ -19,6 +18,11 @@ function Samples(props) {
 
   const [selected, setSelected] = useState(initialSelected);
   const [scrollState, setScrollState] = tile(port);
+
+  const setCurrentSamples = useSetRecoilState(atoms.currentSamples);
+  useEffect(() => {
+    setCurrentSamples(scrollState.rows.map((row) => row.samples).flat());
+  }, [scrollState.rows]);
 
   return (
     <InfiniteScroll

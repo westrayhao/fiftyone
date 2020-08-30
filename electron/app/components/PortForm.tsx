@@ -1,12 +1,11 @@
-import _ from "lodash";
 import React, { useState } from "react";
 import { Input, Label } from "semantic-ui-react";
 
 import connect from "../utils/connect";
-import { getSocket, useSubscribe } from "../utils/socket";
+import { getSocket } from "../utils/socket";
 
 export default connect(({ connected, port, setResult }) => {
-  const [initialState, setInitialState] = useState({ port, connected });
+  const [initialState] = useState({ port, connected });
   const [formState, setFormState] = useState({
     port: port,
     connected: connected,
@@ -47,7 +46,7 @@ export default connect(({ connected, port, setResult }) => {
 
   return (
     <Input labelPosition="right" value={formState.port} onChange={onChange}>
-      <input />
+      <input style={{ color: "black" }} />
       <Label>
         {formState.invalid
           ? "Invalid"

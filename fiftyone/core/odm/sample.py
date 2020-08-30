@@ -3,85 +3,104 @@ Backing document classes for :class:`fiftyone.core.sample.Sample` instances.
 
 Class hierarchy::
 
-    ODMSample
-    ├── ODMNoDatasetSample
-    └── ODMDatasetSample
+    SampleDocument
+    ├── NoDatasetSampleDocument
+    └── DatasetSampleDocument
         ├── my_custom_dataset
         ├── another_dataset
         └── ...
 
 Design invariants:
 
--   a :class:`fiftyone.core.sample.Sample` always has a backing
-    ``sample._doc``, which is an instance of a subclass of :class:`ODMSample`
+-   A :class:`fiftyone.core.sample.Sample` always has a backing
+    ``sample._doc``, which is an instance of a subclass of
+    :class:`SampleDocument`
 
--   a :class:`fiftyone.core.dataset.Dataset` always has a backing
+-   A :class:`fiftyone.core.dataset.Dataset` always has a backing
     ``dataset._sample_doc_cls`` which is a subclass of
-    :class:`ODMDatasetSample``.
+    :class:`DatasetSampleDocument``.
 
 **Implementation details**
 
 When a new :class:`fiftyone.core.sample.Sample` is created, its ``_doc``
-attribute is an instance of :class:`ODMNoDatasetSample`::
+attribute is an instance of :class:`NoDatasetSampleDocument`::
 
     import fiftyone as fo
 
     sample = fo.Sample()
-    sample._doc  # ODMNoDatasetSample
+    sample._doc  # NoDatasetSampleDocument
 
 When a new :class:`fiftyone.core.dataset.Dataset` is created, its
 ``_sample_doc_cls`` attribute holds a dynamically created subclass of
-:class:`ODMDatasetSample` whose name is the name of the dataset::
+:class:`DatasetSampleDocument` whose name is the name of the dataset::
 
     dataset = fo.Dataset(name="my_dataset")
-    dataset._sample_doc_cls  # my_dataset(ODMDatasetSample)
+    dataset._sample_doc_cls  # my_dataset(DatasetSampleDocument)
 
 When a sample is added to a dataset, its ``_doc`` attribute is changed from
-type :class:`ODMNoDatasetSample` to type ``dataset._sample_doc_cls``::
+type :class:`NoDatasetSampleDocument` to type ``dataset._sample_doc_cls``::
 
     dataset.add_sample(sample)
-    sample._doc  # my_dataset(ODMDatasetSample)
+    sample._doc  # my_dataset(DatasetSampleDocument)
 
 | Copyright 2017-2020, Voxel51, Inc.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
-# pragma pylint: disable=redefined-builtin
-# pragma pylint: disable=unused-wildcard-import
-# pragma pylint: disable=wildcard-import
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
-from builtins import *
-import six
-
-# pragma pylint: enable=redefined-builtin
-# pragma pylint: enable=unused-wildcard-import
-# pragma pylint: enable=wildcard-import
-
 from collections import OrderedDict
 from functools import wraps
 import json
 import numbers
+import os
+import random
 
 from bson import json_util
 from bson.binary import Binary
 from mongoengine.errors import InvalidQueryError
 import numpy as np
+import six
 
 import fiftyone as fo
 import fiftyone.core.fields as fof
 import fiftyone.core.metadata as fom
 import fiftyone.core.utils as fou
 
-from .dataset import SampleField
-from .document import ODMDocument, ODMEmbeddedDocument, SerializableDocument
+from .dataset import SampleFieldDocument, DatasetDocument
+from .document import (
+    Document,
+    BaseEmbeddedDocument,
+    SerializableDocument,
+)
+
+
+# Use our own Random object to avoid messing with the user's seed
+_random = random.Random()
+
+
+def _generate_rand(filepath=None):
+    if filepath is not None:
+        _random.seed(filepath)
+
+    return _random.random() * 0.001 + 0.999
+
+
+def default_sample_fields(include_private=False):
+    """The default fields present on all :class:`SampleDocument` objects.
+
+    Args:
+        include_private (False): whether to include fields that start with `_`
+
+    Returns:
+        a tuple of field names
+    """
+    return DatasetSampleDocument._get_fields_ordered(
+        include_private=include_private
+    )
 
 
 def no_delete_default_field(func):
-    """Wrapper for :func:`ODMSample.delete_field` that prevents deleting
-    default fields of :class:`ODMSample`.
+    """Wrapper for :func:`SampleDocument.delete_field` that prevents deleting
+    default fields of :class:`SampleDocument`.
 
     This is a decorator because the subclasses implement this as either an
     instance or class method.
@@ -90,7 +109,7 @@ def no_delete_default_field(func):
     @wraps(func)
     def wrapper(cls_or_self, field_name, *args, **kwargs):
         # pylint: disable=no-member
-        if field_name in ODMDatasetSample._fields_ordered:
+        if field_name in default_sample_fields():
             raise ValueError("Cannot delete default field '%s'" % field_name)
 
         return func(cls_or_self, field_name, *args, **kwargs)
@@ -98,13 +117,13 @@ def no_delete_default_field(func):
     return wrapper
 
 
-class ODMSample(SerializableDocument):
-    """Interface for all sample backing documents."""
+class SampleDocument(SerializableDocument):
+    """Interface for sample backing documents."""
 
     @property
-    def dataset_name(self):
-        """The name of the dataset to which this sample belongs, or ``None`` if
-        it has not been added to a dataset.
+    def collection_name(self):
+        """The name of the MongoDB collection to which this sample belongs, or
+        ``None`` if it has not been added to a dataset.
         """
         return None
 
@@ -170,12 +189,8 @@ class ODMSample(SerializableDocument):
         """
         raise NotImplementedError("Subclass must implement `clear_field()`")
 
-    @classmethod
-    def _get_class_repr(cls):
-        return "Sample"
 
-
-class ODMDatasetSample(ODMDocument, ODMSample):
+class DatasetSampleDocument(Document, SampleDocument):
     """Base class for sample documents backing samples in datasets.
 
     All ``fiftyone.core.dataset.Dataset._sample_doc_cls`` classes inherit from
@@ -192,6 +207,9 @@ class ODMDatasetSample(ODMDocument, ODMSample):
 
     # Metadata about the sample media
     metadata = fof.EmbeddedDocumentField(fom.Metadata, null=True)
+
+    # Random float used for random dataset operations (e.g. shuffle)
+    _rand = fof.FloatField(default=_generate_rand)
 
     def __setattr__(self, name, value):
         # pylint: disable=no-member
@@ -213,16 +231,21 @@ class ODMDatasetSample(ODMDocument, ODMSample):
         super().__setattr__(name, value)
 
     @property
-    def dataset_name(self):
+    def collection_name(self):
         return self.__class__.__name__
 
     @property
     def field_names(self):
-        # pylint: disable=no-member
-        return tuple(f for f in self._fields_ordered if f != "id")
+        return tuple(
+            f
+            for f in self._get_fields_ordered(include_private=False)
+            if f != "id"
+        )
 
     @classmethod
-    def get_field_schema(cls, ftype=None, embedded_doc_type=None):
+    def get_field_schema(
+        cls, ftype=None, embedded_doc_type=None, include_private=False
+    ):
         """Returns a schema dictionary describing the fields of this sample.
 
         If the sample belongs to a dataset, the schema will apply to all
@@ -234,7 +257,9 @@ class ODMDatasetSample(ODMDocument, ODMSample):
                 :class:`fiftyone.core.fields.Field`
             embedded_doc_type (None): an optional embedded document type to
                 which to restrict the returned schema. Must be a subclass of
-                :class:`fiftyone.core.odm.ODMEmbeddedDocument`
+                :class:`fiftyone.core.odm.BaseEmbeddedDocument`
+            include_private (False): whether to include fields that start with
+                `_` in the returned schema
 
         Returns:
              a dictionary mapping field names to field types
@@ -256,7 +281,8 @@ class ODMDatasetSample(ODMDocument, ODMSample):
             )
 
         d = OrderedDict()
-        for field_name in cls._fields_ordered:
+        field_names = cls._get_fields_ordered(include_private=include_private)
+        for field_name in field_names:
             # pylint: disable=no-member
             field = cls._fields[field_name]
             if not isinstance(cls._fields[field_name], ftype):
@@ -297,11 +323,12 @@ class ODMDatasetSample(ODMDocument, ODMSample):
             ftype: the field type to create. Must be a subclass of
                 :class:`fiftyone.core.fields.Field`
             embedded_doc_type (None): the
-                :class:`fiftyone.core.odm.ODMEmbeddedDocument` type of the
-                field. Used only when ``ftype`` is
+                :class:`fiftyone.core.odm.BaseEmbeddedDocument` type of the
+                field. Used only when ``ftype`` is an embedded
                 :class:`fiftyone.core.fields.EmbeddedDocumentField`
             subfield (None): the type of the contained field. Used only when
-                ``ftype`` is a list or dict type
+                ``ftype`` is a :class:`fiftyone.core.fields.ListField` or
+                :class:`fiftyone.core.fields.DictField`
         """
         # Additional arg `save` is to prevent saving the fields when reloading
         # a dataset from the database.
@@ -320,7 +347,7 @@ class ODMDatasetSample(ODMDocument, ODMSample):
         cls._fields[field_name] = field
         cls._fields_ordered += (field_name,)
         try:
-            if issubclass(cls, ODMDatasetSample):
+            if issubclass(cls, DatasetSampleDocument):
                 # Only set the attribute if it is a class
                 setattr(cls, field_name, field)
         except TypeError:
@@ -329,14 +356,14 @@ class ODMDatasetSample(ODMDocument, ODMSample):
 
         if save:
             # Update dataset meta class
-            # @todo(Tyler) refactor to avoid local import here
-            import fiftyone.core.dataset as fod
+            dataset_doc = DatasetDocument.objects.get(
+                sample_collection_name=cls.__name__
+            )
 
-            dataset = fod.load_dataset(cls.__name__)
             field = cls._fields[field_name]
-            sample_field = SampleField.from_field(field)
-            dataset._meta.sample_fields.append(sample_field)
-            dataset._meta.save()
+            sample_field = SampleFieldDocument.from_field(field)
+            dataset_doc.sample_fields.append(sample_field)
+            dataset_doc.save()
 
     @classmethod
     def add_implied_field(cls, field_name, value):
@@ -408,37 +435,160 @@ class ODMDatasetSample(ODMDocument, ODMSample):
         delattr(cls, field_name)
 
         # Update dataset meta class
-        # @todo(Tyler) refactor to avoid local import here
-        import fiftyone.core.dataset as fod
-
-        dataset = fod.load_dataset(cls.__name__)
-        dataset._meta.sample_fields = [
-            sf for sf in dataset._meta.sample_fields if sf.name != field_name
+        dataset_doc = DatasetDocument.objects.get(
+            sample_collection_name=cls.__name__
+        )
+        dataset_doc.sample_fields = [
+            sf for sf in dataset_doc.sample_fields if sf.name != field_name
         ]
-        dataset._meta.save()
+        dataset_doc.save()
 
-    def _to_repr_dict(self):
-        d = {"dataset_name": self.dataset_name}
-        d.update(super()._to_repr_dict())
-        return d
+    def _update(self, object_id, update_doc, filtered_fields=None, **kwargs):
+        """Updates an existing document.
+
+        Helper method; should only be used inside
+        :meth:`DatasetSampleDocument.save`.
+        """
+        updated_existing = True
+
+        collection = self._get_collection()
+
+        select_dict = {"_id": object_id}
+
+        extra_updates = self._extract_extra_updates(
+            update_doc, filtered_fields
+        )
+
+        if update_doc:
+            result = collection.update_one(
+                select_dict, update_doc, upsert=True
+            ).raw_result
+            if result is not None:
+                updated_existing = result.get("updatedExisting")
+
+        for update, element_id in extra_updates:
+            result = collection.update_one(
+                select_dict,
+                update,
+                array_filters=[{"element._id": element_id}],
+                upsert=True,
+            ).raw_result
+
+            if result is not None:
+                updated_existing = updated_existing and result.get(
+                    "updatedExisting"
+                )
+
+        return updated_existing
+
+    def _extract_extra_updates(self, update_doc, filtered_fields):
+        """Extracts updates for filtered list fields that need to be updated
+        by ID, not relative position (index).
+        """
+        extra_updates = []
+
+        #
+        # Check for illegal modifications
+        # Match the list, or an indexed item in the list, but not a field
+        # of an indexed item of the list:
+        #   my_detections.detections          <- MATCH
+        #   my_detections.detections.1        <- MATCH
+        #   my_detections.detections.1.label  <- NO MATCH
+        #
+        if filtered_fields:
+            for d in update_doc.values():
+                for k in d.keys():
+                    for ff in filtered_fields:
+                        if k.startswith(ff) and not k.lstrip(ff).count("."):
+                            raise ValueError(
+                                "Modifying root of filtered list field '%s' "
+                                "is not allowed" % k
+                            )
+
+        if filtered_fields and "$set" in update_doc:
+            d = update_doc["$set"]
+            del_keys = []
+
+            for k, v in d.items():
+                filtered_field = None
+                for ff in filtered_fields:
+                    if k.startswith(ff):
+                        filtered_field = ff
+                        break
+
+                if filtered_field:
+                    element_id, el_filter = self._parse_id_and_array_filter(
+                        k, filtered_field
+                    )
+                    extra_updates.append(
+                        ({"$set": {el_filter: v}}, element_id)
+                    )
+
+                    del_keys.append(k)
+
+            for k in del_keys:
+                del d[k]
+
+            if not update_doc["$set"]:
+                del update_doc["$set"]
+
+        return extra_updates
+
+    def _parse_id_and_array_filter(self, list_element_field, filtered_field):
+        """Converts the ``list_element_field`` and ``filtered_field`` to an
+        element object ID and array filter.
+
+        Example::
+
+            Input:
+                list_element_field = "test_dets.detections.1.label"
+                filtered_field = "test_dets.detections"
+
+            Output:
+                ObjectID("5f2062bf27c024654f5286a0")
+                "test_dets.detections.$[element].label"
+        """
+        el = self
+        for field_name in filtered_field.split("."):
+            el = el[field_name]
+
+        el_fields = list_element_field.lstrip(filtered_field).split(".")
+        idx = int(el_fields.pop(0))
+
+        el = el[idx]
+        el_filter = ".".join([filtered_field, "$[element]"] + el_fields)
+
+        return el._id, el_filter
+
+    @classmethod
+    def _get_fields_ordered(cls, include_private=False):
+        if include_private:
+            return cls._fields_ordered
+        return tuple(f for f in cls._fields_ordered if not f.startswith("_"))
 
 
-class ODMNoDatasetSample(ODMSample):
+class NoDatasetSampleDocument(SampleDocument):
     """Backing document for samples that have not been added to a dataset."""
 
     # pylint: disable=no-member
-    default_fields = ODMDatasetSample._fields
-    default_fields_ordered = ODMDatasetSample._fields_ordered
+    default_fields = DatasetSampleDocument._fields
+    default_fields_ordered = default_sample_fields(include_private=True)
 
     def __init__(self, **kwargs):
         self._data = OrderedDict()
+        filepath = kwargs.get("filepath", None)
 
         for field_name in self.default_fields_ordered:
-
             value = kwargs.pop(field_name, None)
+
+            if field_name == "_rand":
+                value = _generate_rand(filepath=filepath)
 
             if value is None:
                 value = self._get_default(self.default_fields[field_name])
+
+            if field_name == "filepath":
+                value = os.path.abspath(os.path.expanduser(value))
 
             self._data[field_name] = value
 
@@ -475,13 +625,12 @@ class ODMNoDatasetSample(ODMSample):
     def id(self):
         return None
 
-    @property
-    def _to_str_fields(self):
+    def _get_repr_fields(self):
         return ("id",) + self.field_names
 
     @property
     def field_names(self):
-        return tuple(self._data.keys())
+        return tuple(k for k in self._data.keys() if not k.startswith("_"))
 
     @staticmethod
     def _get_default(field):
@@ -503,13 +652,13 @@ class ODMNoDatasetSample(ODMSample):
 
             return value
 
-        raise ValueError("Field has no default")
+        raise ValueError("Field '%s' has no default" % field)
 
     def has_field(self, field_name):
         try:
             return field_name in self._data
         except AttributeError:
-            # if `_data` is not initialized
+            # If `_data` is not initialized
             return False
 
     def get_field(self, field_name):
@@ -626,28 +775,36 @@ class ODMNoDatasetSample(ODMSample):
 
 
 def _get_implied_field_kwargs(value):
-    if isinstance(value, ODMEmbeddedDocument):
+    if isinstance(value, BaseEmbeddedDocument):
         return {
             "ftype": fof.EmbeddedDocumentField,
             "embedded_doc_type": type(value),
         }
+
     if isinstance(value, bool):
         return {"ftype": fof.BooleanField}
+
     if isinstance(value, six.integer_types):
         return {"ftype": fof.IntField}
+
     if isinstance(value, numbers.Number):
         return {"ftype": fof.FloatField}
+
     if isinstance(value, six.string_types):
         return {"ftype": fof.StringField}
+
     if isinstance(value, (list, tuple)):
         return {"ftype": fof.ListField}
+
     if isinstance(value, np.ndarray):
         if value.ndim == 1:
             return {"ftype": fof.VectorField}
 
         return {"ftype": fof.ArrayField}
+
     if isinstance(value, dict):
         return {"ftype": fof.DictField}
+
     raise TypeError("Unsupported field value '%s'" % type(value))
 
 

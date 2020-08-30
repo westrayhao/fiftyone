@@ -5,20 +5,6 @@ Definition of the `fiftyone` command-line interface (CLI).
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
-# pragma pylint: disable=redefined-builtin
-# pragma pylint: disable=unused-wildcard-import
-# pragma pylint: disable=wildcard-import
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
-from builtins import *
-from future.utils import iteritems, itervalues
-
-# pragma pylint: enable=redefined-builtin
-# pragma pylint: enable=unused-wildcard-import
-# pragma pylint: enable=wildcard-import
-
 import argparse
 from collections import defaultdict
 import io
@@ -40,6 +26,7 @@ import fiftyone.core.dataset as fod
 import fiftyone.core.session as fos
 import fiftyone.core.utils as fou
 import fiftyone.utils.data as foud
+import fiftyone.utils.quickstart as fouq
 import fiftyone.zoo as foz
 
 
@@ -82,6 +69,7 @@ class FiftyOneCommand(Command):
     @staticmethod
     def setup(parser):
         subparsers = parser.add_subparsers(title="available commands")
+        _register_command(subparsers, "quickstart", QuickstartCommand)
         _register_command(subparsers, "config", ConfigCommand)
         _register_command(subparsers, "constants", ConstantsCommand)
         _register_command(subparsers, "convert", ConvertCommand)
@@ -92,6 +80,24 @@ class FiftyOneCommand(Command):
     @staticmethod
     def execute(parser, args):
         parser.print_help()
+
+
+class QuickstartCommand(Command):
+    """Launch a FiftyOne quickstart.
+
+    Examples::
+
+        # Launch the quickstart
+        fiftyone quickstart
+    """
+
+    @staticmethod
+    def setup(parser):
+        pass
+
+    @staticmethod
+    def execute(parser, args):
+        fouq.quickstart(interactive=False)
 
 
 class ConfigCommand(Command):
@@ -107,27 +113,18 @@ class ConfigCommand(Command):
 
         # Print the location of your config
         fiftyone config --locate
-
-        # Save your current config to disk
-        fiftyone config --save
     """
 
     @staticmethod
     def setup(parser):
         parser.add_argument(
-            "field", nargs="?", metavar="FIELD", help="a config field"
+            "field", nargs="?", metavar="FIELD", help="a config field to print"
         )
         parser.add_argument(
             "-l",
             "--locate",
             action="store_true",
             help="print the location of your config on disk",
-        )
-        parser.add_argument(
-            "-s",
-            "--save",
-            action="store_true",
-            help="save your current config to disk",
         )
 
     @staticmethod
@@ -140,20 +137,7 @@ class ConfigCommand(Command):
                     "No config file found at '%s'.\n"
                     % foc.FIFTYONE_CONFIG_PATH
                 )
-                print(
-                    "To save your current config (which may differ from the "
-                    "default config if you\n"
-                    "have any `FIFTYONE_XXX` environment variables set), run:"
-                    "\n\n"
-                    "fiftyone config --save"
-                    "\n"
-                )
 
-            return
-
-        if args.save:
-            fo.config.write_json(foc.FIFTYONE_CONFIG_PATH, pretty_print=True)
-            print("Config written to '%s'" % foc.FIFTYONE_CONFIG_PATH)
             return
 
         if args.field:
@@ -197,7 +181,7 @@ class ConstantsCommand(Command):
         _print_constants_table(
             {
                 k: v
-                for k, v in iteritems(vars(foc))
+                for k, v in vars(foc).items()
                 if not k.startswith("_") and k == k.upper()
             }
         )
@@ -205,7 +189,7 @@ class ConstantsCommand(Command):
 
 def _print_constants_table(d):
     contents = sorted(
-        ((k, _render_constant_value(v)) for k, v in iteritems(d)),
+        ((k, _render_constant_value(v)) for k, v in d.items()),
         key=lambda kv: kv[0],
     )
     table_str = tabulate(
@@ -255,10 +239,7 @@ class ConvertCommand(Command):
         parser.add_argument(
             "--input-type",
             metavar="INPUT_TYPE",
-            help=(
-                "the type of the input dataset (a subclass of "
-                "`fiftyone.types.BaseDataset`)"
-            ),
+            help="the fiftyone.types.Dataset type of the input dataset",
         )
         parser.add_argument(
             "--output-dir",
@@ -268,10 +249,7 @@ class ConvertCommand(Command):
         parser.add_argument(
             "--output-type",
             metavar="OUTPUT_TYPE",
-            help=(
-                "the desired output dataset type (a subclass of "
-                "`fiftyone.types.BaseDataset`)"
-            ),
+            help="the fiftyone.types.Dataset type to output",
         )
 
     @staticmethod
@@ -282,7 +260,12 @@ class ConvertCommand(Command):
         output_dir = args.output_dir
         output_type = etau.get_class(args.output_type)
 
-        foud.convert_dataset(input_dir, input_type, output_dir, output_type)
+        foud.convert_dataset(
+            input_dir=input_dir,
+            input_type=input_type,
+            output_dir=output_dir,
+            output_type=output_type,
+        )
 
 
 class DatasetsCommand(Command):
@@ -298,6 +281,8 @@ class DatasetsCommand(Command):
         _register_command(subparsers, "tail", DatasetsTailCommand)
         _register_command(subparsers, "stream", DatasetsStreamCommand)
         _register_command(subparsers, "export", DatasetsExportCommand)
+        _register_command(subparsers, "draw", DatasetsDrawCommand)
+        _register_command(subparsers, "rename", DatasetsRenameCommand)
         _register_command(subparsers, "delete", DatasetsDeleteCommand)
 
     @staticmethod
@@ -320,10 +305,10 @@ class DatasetsListCommand(Command):
 
     @staticmethod
     def execute(parser, args):
-        datasets = fod.list_dataset_names()
+        datasets = fod.list_datasets()
 
         if datasets:
-            for dataset in sorted(datasets):
+            for dataset in datasets:
                 print(dataset)
         else:
             print("No datasets found")
@@ -384,10 +369,7 @@ class DatasetsCreateCommand(Command):
             "-t",
             "--type",
             metavar="TYPE",
-            help=(
-                "the type of the dataset (a subclass of "
-                "`fiftyone.types.BaseDataset`)"
-            ),
+            help="the fiftyone.types.Dataset type of the dataset",
         )
 
     @staticmethod
@@ -445,7 +427,8 @@ class DatasetsHeadCommand(Command):
         num_samples = args.num_samples
 
         dataset = fod.load_dataset(name)
-        print(dataset.view().head(num_samples=num_samples))
+        for sample in dataset.head(num_samples=num_samples):
+            print(sample)
 
 
 class DatasetsTailCommand(Command):
@@ -480,7 +463,8 @@ class DatasetsTailCommand(Command):
         num_samples = args.num_samples
 
         dataset = fod.load_dataset(name)
-        print(dataset.view().tail(num_samples=num_samples))
+        for sample in dataset.tail(num_samples=num_samples):
+            print(sample)
 
 
 class DatasetsStreamCommand(Command):
@@ -562,10 +546,7 @@ class DatasetsExportCommand(Command):
             "-t",
             "--type",
             metavar="TYPE",
-            help=(
-                "the format in which to export the dataset (a subclass of "
-                "`fiftyone.types.BaseDataset`)"
-            ),
+            help="the fiftyone.types.Dataset type in which to export",
         )
 
     @staticmethod
@@ -590,6 +571,78 @@ class DatasetsExportCommand(Command):
             raise ValueError(
                 "Either `export_dir` or `json_path` must be provided"
             )
+
+
+class DatasetsDrawCommand(Command):
+    """Writes annotated versions of samples in FiftyOne datasets to disk.
+
+    Examples::
+
+        # Write annotated versions of the samples in the dataset with the
+        # specified labels overlaid to disk
+        fiftyone datasets draw <name> \\
+            --anno-dir <anno-dir> --label-fields <label-fields>
+    """
+
+    @staticmethod
+    def setup(parser):
+        parser.add_argument(
+            "name", metavar="NAME", help="the name of the dataset to annotate",
+        )
+        parser.add_argument(
+            "-d",
+            "--anno-dir",
+            metavar="ANNO_DIR",
+            help="the directory in which to write the annotated data",
+        )
+        parser.add_argument(
+            "-f",
+            "--label-fields",
+            metavar="LABEL_FIELDs",
+            help="a comma-separated list of label fields to export",
+        )
+
+    @staticmethod
+    def execute(parser, args):
+        name = args.name
+        anno_dir = args.anno_dir
+        label_fields = args.label_fields
+
+        dataset = fod.load_dataset(name)
+
+        if label_fields is not None:
+            label_fields = [f.strip() for f in label_fields.split(",")]
+
+        dataset.draw_labels(anno_dir, label_fields=label_fields)
+        print("Annotations written to '%s'" % anno_dir)
+
+
+class DatasetsRenameCommand(Command):
+    """Rename FiftyOne datasets.
+
+    Examples::
+
+        # Rename the dataset
+        fiftyone datasets rename <old-name> <new-name>
+    """
+
+    @staticmethod
+    def setup(parser):
+        parser.add_argument(
+            "name", metavar="NAME", help="the name of the dataset",
+        )
+        parser.add_argument(
+            "new_name", metavar="NEW_NAME", help="a new name for the dataset",
+        )
+
+    @staticmethod
+    def execute(parser, args):
+        name = args.name
+        new_name = args.new_name
+
+        dataset = fod.load_dataset(name)
+        dataset.name = new_name
+        print("Dataset '%s' renamed to '%s'" % (name, new_name))
 
 
 class DatasetsDeleteCommand(Command):
@@ -684,8 +737,7 @@ def _watch_session(session, remote=False):
 
 
 class AppViewCommand(Command):
-    """View datasets in the FiftyOne App without persisting them to the
-    database.
+    """View datasets in the App without persisting them to the database.
 
     Examples::
 
@@ -717,10 +769,7 @@ class AppViewCommand(Command):
             "-t",
             "--type",
             metavar="TYPE",
-            help=(
-                "the dataset type (a subclass of "
-                "`fiftyone.types.BaseDataset`)"
-            ),
+            help="the fiftyone.types.Dataset type of the dataset",
         )
         parser.add_argument(
             "-z",
@@ -919,20 +968,24 @@ class ZooListCommand(Command):
     @staticmethod
     def execute(parser, args):
         all_datasets = foz._get_zoo_datasets()
-        all_sources = foz._get_zoo_dataset_sources()
+        all_sources, has_default = foz._get_zoo_dataset_sources()
 
         base_dir = args.base_dir
         downloaded_datasets = foz.list_downloaded_zoo_datasets(
             base_dir=base_dir
         )
 
-        _print_zoo_dataset_list(all_datasets, all_sources, downloaded_datasets)
+        _print_zoo_dataset_list(
+            downloaded_datasets, all_datasets, all_sources, has_default
+        )
 
 
-def _print_zoo_dataset_list(all_datasets, all_sources, downloaded_datasets):
+def _print_zoo_dataset_list(
+    downloaded_datasets, all_datasets, all_sources, has_default
+):
     available_datasets = defaultdict(dict)
-    for source, datasets in iteritems(all_datasets):
-        for name, zoo_dataset_cls in iteritems(datasets):
+    for source, datasets in all_datasets.items():
+        for name, zoo_dataset_cls in datasets.items():
             available_datasets[name][source] = zoo_dataset_cls()
 
     records = []
@@ -949,7 +1002,7 @@ def _print_zoo_dataset_list(all_datasets, all_sources, downloaded_datasets):
 
         # Get available splits across all sources
         splits = set()
-        for zoo_dataset in itervalues(dataset_sources):
+        for zoo_dataset in dataset_sources.values():
             if zoo_dataset.has_splits:
                 splits.update(zoo_dataset.supported_splits)
             else:
@@ -986,9 +1039,10 @@ def _print_zoo_dataset_list(all_datasets, all_sources, downloaded_datasets):
                 (name, split, is_downloaded, split_dir) + tuple(srcs)
             )
 
+    first_suffix = " (*)" if has_default else ""
     headers = (
         ["name", "split", "downloaded", "dataset_dir"]
-        + ["%s (*)" % all_sources[0]]
+        + ["%s%s" % (all_sources[0], first_suffix)]
         + all_sources[1:]
     )
     table_str = tabulate(records, headers=headers, tablefmt=_TABLE_FORMAT)
@@ -1002,6 +1056,9 @@ class ZooFindCommand(Command):
 
         # Print the location of the downloaded zoo dataset on disk
         fiftyone zoo find <name>
+
+        # Print the location of a specific split of the dataset
+        fiftyone zoo find <name> --split <split>
     """
 
     @staticmethod
@@ -1009,12 +1066,16 @@ class ZooFindCommand(Command):
         parser.add_argument(
             "name", metavar="NAME", help="the name of the dataset"
         )
+        parser.add_argument(
+            "-s", "--split", metavar="SPLIT", help="a dataset split",
+        )
 
     @staticmethod
     def execute(parser, args):
         name = args.name
+        split = args.split
 
-        dataset_dir = foz.find_zoo_dataset(name)
+        dataset_dir = foz.find_zoo_dataset(name, split=split)
         print(dataset_dir)
 
 
@@ -1127,6 +1188,9 @@ class ZooLoadCommand(Command):
         # Load the specified split(s) of the zoo dataset
         fiftyone zoo load <name> --splits <split1> ...
 
+        # Load the zoo dataset with a custom name
+        fiftyone zoo load <name> --dataset-name <dataset-name>
+
         # Load the zoo dataset from a custom directory
         fiftyone zoo load <name> --dataset-dir <dataset-dir>
     """
@@ -1144,6 +1208,12 @@ class ZooLoadCommand(Command):
             help="the dataset splits to load",
         )
         parser.add_argument(
+            "-n",
+            "--dataset-name",
+            metavar="DATASET_NAME",
+            help="a custom name to give the FiftyOne dataset",
+        )
+        parser.add_argument(
             "-d",
             "--dataset-dir",
             metavar="DATASET_DIR",
@@ -1154,9 +1224,13 @@ class ZooLoadCommand(Command):
     def execute(parser, args):
         name = args.name
         splits = args.splits
+        dataset_name = args.dataset_name
         dataset_dir = args.dataset_dir
         dataset = foz.load_zoo_dataset(
-            name, splits=splits, dataset_dir=dataset_dir
+            name,
+            splits=splits,
+            dataset_name=dataset_name,
+            dataset_dir=dataset_dir,
         )
         dataset.persistent = True
         print("Dataset '%s' created" % dataset.name)
@@ -1167,7 +1241,7 @@ def _print_dict_as_json(d):
 
 
 def _print_dict_as_table(d):
-    records = [(k, v) for k, v in iteritems(d)]
+    records = [(k, v) for k, v in d.items()]
     table_str = tabulate(
         records, headers=["key", "value"], tablefmt=_TABLE_FORMAT
     )
@@ -1185,7 +1259,7 @@ def _has_subparsers(parser):
 def _iter_subparsers(parser):
     for action in parser._actions:
         if isinstance(action, argparse._SubParsersAction):
-            for subparser in itervalues(action.choices):
+            for subparser in action.choices.values():
                 yield subparser
 
 

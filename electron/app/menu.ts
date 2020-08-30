@@ -188,7 +188,7 @@ export default class MenuBuilder {
           label: "Slack",
           click() {
             shell.openExternal(
-              "https://voxel51.slack.com/app_redirect?channel=C0154574MKJ"
+              "https://join.slack.com/t/fiftyone-users/shared_invite/zt-gtpmm76o-9AjvzNPBOzevBySKzt02gg"
             );
           },
         },
@@ -298,7 +298,7 @@ export default class MenuBuilder {
             label: "Slack",
             click() {
               shell.openExternal(
-                "https://voxel51.slack.com/app_redirect?channel=C0154574MKJ"
+                "https://join.slack.com/t/fiftyone-users/shared_invite/zt-gtpmm76o-9AjvzNPBOzevBySKzt02gg"
               );
             },
           },

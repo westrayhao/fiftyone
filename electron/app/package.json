@@ -15,11 +15,12 @@
   },
   "dependencies": {
     "fomantic-ui-less": "^2.8.4",
-    "lodash": "^4.17.15",
+    "lodash": "^4.17.19",
     "prettier": "^2.0.5",
     "react": "^0.0.0-experimental-33c3af284",
     "react-dom": "^0.0.0-experimental-33c3af284",
     "react-infinite": "^0.13.0",
+    "recoil": "0.0.10",
     "semantic-ui-react": "^0.88.2",
     "socket.io-client": "^2.3.0"
   }

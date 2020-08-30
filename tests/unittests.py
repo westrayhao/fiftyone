@@ -1,13 +1,11 @@
 """
-Unit tests.
+FiftyOne unit tests.
 
-To run a single test, modify the main code to:
+To run a single test, modify the main code to::
 
-```
-singletest = unittest.TestSuite()
-singletest.addTest(TESTCASE("<TEST METHOD NAME>"))
-unittest.TextTestRunner().run(singletest)
-```
+    singletest = unittest.TestSuite()
+    singletest.addTest(TESTCASE("<TEST METHOD NAME>"))
+    unittest.TextTestRunner().run(singletest)
 
 | Copyright 2017-2020, Voxel51, Inc.
 | `voxel51.com <https://voxel51.com/>`_
@@ -15,6 +13,9 @@ unittest.TextTestRunner().run(singletest)
 """
 import datetime
 from functools import wraps
+import gc
+import math
+import os
 import unittest
 
 from mongoengine.errors import (
@@ -27,10 +28,15 @@ from pymongo.errors import DuplicateKeyError
 import fiftyone as fo
 import fiftyone.core.dataset as fod
 import fiftyone.core.odm as foo
+from fiftyone.core.odm.sample import default_sample_fields
+import fiftyone.core.sample as fos
+from fiftyone import ViewField as F
 
 
 def drop_datasets(func):
-    """Decorator to drop the database before running a test"""
+    """Decorator that drops all non-persistent datasets from the database
+    before running a test.
+    """
 
     @wraps(func)
     def wrapper(*args, **kwargs):
@@ -40,17 +46,17 @@ def drop_datasets(func):
     return wrapper
 
 
-class SingleProcessSynchronizationTest(unittest.TestCase):
+class SingleProcessSynchronizationTests(unittest.TestCase):
     """Tests ensuring that when a dataset or samples in a dataset are modified
     all relevant objects are instantly in sync within the same process.
     """
 
     @drop_datasets
-    def test_pername_singleton(self):
-        """Test datasets are always in sync with themselves"""
+    def test_dataset_singleton(self):
+        """Testss that datasets are singletons."""
         dataset1 = fo.Dataset("test_dataset")
         dataset2 = fo.load_dataset("test_dataset")
-        dataset3 = fo.Dataset("another_dataset")
+        dataset3 = fo.Dataset()
         self.assertIs(dataset1, dataset2)
         self.assertIsNot(dataset1, dataset3)
 
@@ -59,9 +65,8 @@ class SingleProcessSynchronizationTest(unittest.TestCase):
 
     @drop_datasets
     def test_sample_singletons(self):
-        """Test samples are always in sync with themselves"""
-        dataset_name = self.test_sample_singletons.__name__
-        dataset = fo.Dataset(dataset_name)
+        """Tests that samples are singletons."""
+        dataset = fo.Dataset()
 
         filepath = "test1.png"
         sample = fo.Sample(filepath=filepath)
@@ -73,16 +78,17 @@ class SingleProcessSynchronizationTest(unittest.TestCase):
         dataset.add_sample(sample3)
         self.assertIsNot(sample3, sample)
 
-        sample4 = dataset.view().match({"filepath": filepath}).first()
-        self.assertIs(sample4, sample)
+        sample4 = dataset.match(
+            {"filepath": os.path.abspath(filepath)}
+        ).first()
+        self.assertIsNot(sample4, sample)
 
     @drop_datasets
     def test_dataset_add_delete_field(self):
-        """Test when fields are added or removed from a dataset field schema,
-        those changes are reflected on the samples in the dataset.
+        """Tests that when fields are added or removed from a dataset field
+        schema, those changes are reflected on the samples in the dataset.
         """
-        dataset_name = self.test_dataset_add_delete_field.__name__
-        dataset = fo.Dataset(dataset_name)
+        dataset = fo.Dataset()
 
         sample = fo.Sample(filepath="test1.png")
         dataset.add_sample(sample)
@@ -132,24 +138,23 @@ class SingleProcessSynchronizationTest(unittest.TestCase):
 
     @drop_datasets
     def test_dataset_remove_samples(self):
-        """Test when a sample is deleted from a dataset, the sample is
+        """Tests that when a sample is deleted from a dataset, the sample is
         disconnected from the dataset.
         """
-        dataset_name = self.test_dataset_remove_samples.__name__
-        dataset = fo.Dataset(dataset_name)
+        dataset = fo.Dataset()
 
         # add 1 sample
         sample = fo.Sample(filepath="test1.png")
         dataset.add_sample(sample)
         self.assertTrue(sample.in_dataset)
         self.assertIsNotNone(sample.id)
-        self.assertEqual(sample.dataset_name, dataset.name)
+        self.assertIs(sample.dataset, dataset)
 
         # delete 1 sample
         dataset.remove_sample(sample)
         self.assertFalse(sample.in_dataset)
         self.assertIsNone(sample.id)
-        self.assertIsNone(sample.dataset_name)
+        self.assertIsNone(sample.dataset)
 
         # add multiple samples
         filepath_template = "test%d.png"
@@ -162,7 +167,7 @@ class SingleProcessSynchronizationTest(unittest.TestCase):
         for sample in samples:
             self.assertTrue(sample.in_dataset)
             self.assertIsNotNone(sample.id)
-            self.assertEqual(sample.dataset_name, dataset.name)
+            self.assertIs(sample.dataset, dataset)
 
         # delete some
         num_delete = 7
@@ -171,26 +176,25 @@ class SingleProcessSynchronizationTest(unittest.TestCase):
             if i < num_delete:
                 self.assertFalse(sample.in_dataset)
                 self.assertIsNone(sample.id)
-                self.assertIsNone(sample.dataset_name)
+                self.assertIsNone(sample.dataset)
             else:
                 self.assertTrue(sample.in_dataset)
                 self.assertIsNotNone(sample.id)
-                self.assertEqual(sample.dataset_name, dataset.name)
+                self.assertIs(sample.dataset, dataset)
 
         # clear dataset
         dataset.clear()
         for sample in samples:
             self.assertFalse(sample.in_dataset)
             self.assertIsNone(sample.id)
-            self.assertIsNone(sample.dataset_name)
+            self.assertIsNone(sample.dataset)
 
     @drop_datasets
     def test_sample_set_field(self):
-        """Test when a field is added to the dataset schema via implicit adding
-        on a sample, that change is reflected in the dataset.
+        """Tests that when a field is added to the dataset schema via implicit
+        adding on a sample, that change is reflected in the dataset.
         """
-        dataset_name = self.test_sample_set_field.__name__
-        dataset = fo.Dataset(dataset_name)
+        dataset = fo.Dataset()
         sample = fo.Sample(filepath="test1.png")
         dataset.add_sample(sample)
 
@@ -209,7 +213,7 @@ class SingleProcessSynchronizationTest(unittest.TestCase):
         self.assertIsInstance(fields[field_name], ftype)
 
 
-class ScopedObjectsSynchronizationTest(unittest.TestCase):
+class ScopedObjectsSynchronizationTests(unittest.TestCase):
     """Tests ensuring that when a dataset or samples in a dataset are modified,
     those changes are passed on the the database and can be seen in different
     scopes (or processes!).
@@ -233,7 +237,7 @@ class ScopedObjectsSynchronizationTest(unittest.TestCase):
             fo.load_dataset(dataset_name)
 
         def check_create_dataset_via_load():
-            self.assertIn(dataset_name, fo.list_dataset_names())
+            self.assertIn(dataset_name, fo.list_datasets())
             dataset = fo.load_dataset(dataset_name)
 
         check_create_dataset()
@@ -280,7 +284,7 @@ class ScopedObjectsSynchronizationTest(unittest.TestCase):
 
             # this is checking backend implementation. if it changes this may
             # be N/A
-            sample_fields = dataset._meta.sample_fields
+            sample_fields = dataset._doc.sample_fields
             sample_field_names = [sf.name for sf in sample_fields]
             self.assertNotIn(field_name, sample_field_names)
 
@@ -324,7 +328,7 @@ class ScopedObjectsSynchronizationTest(unittest.TestCase):
             sample = dataset[sample_id]
             self.assertTrue(sample.in_dataset)
             self.assertIsNotNone(sample.id)
-            self.assertEqual(sample.dataset_name, dataset.name)
+            self.assertIs(sample.dataset, dataset)
 
         sample_id = add_sample()
         check_add_sample(sample_id)
@@ -365,7 +369,7 @@ class ScopedObjectsSynchronizationTest(unittest.TestCase):
                 sample = dataset[sample_id]
                 self.assertTrue(sample.in_dataset)
                 self.assertIsNotNone(sample.id)
-                self.assertEqual(sample.dataset_name, dataset.name)
+                self.assertIs(sample.dataset, dataset)
 
         sample_ids = add_samples()
         check_add_samples(sample_ids)
@@ -390,7 +394,7 @@ class ScopedObjectsSynchronizationTest(unittest.TestCase):
                     sample = dataset[sample_id]
                     self.assertTrue(sample.in_dataset)
                     self.assertIsNotNone(sample.id)
-                    self.assertEqual(sample.dataset_name, dataset.name)
+                    self.assertIs(sample.dataset, dataset)
 
         remove_samples(sample_ids)
         check_remove_samples(sample_ids)
@@ -473,7 +477,7 @@ class ScopedObjectsSynchronizationTest(unittest.TestCase):
 
         def create_dataset():
             dataset = fo.Dataset(dataset_name)
-            sample = fo.Sample(filepath="path/to/file.jpg")
+            sample = fo.Sample(filepath="/path/to/image.jpg")
             return dataset.add_sample(sample)
 
         sample_id = create_dataset()
@@ -642,42 +646,44 @@ class ScopedObjectsSynchronizationTest(unittest.TestCase):
         check_modify_list_iadd(sample_id)
 
 
-class MultiProcessSynchronizationTest(unittest.TestCase):
-    """What happens when multiple processes (users) are modifying the same
-    dataset?
+class MultiProcessSynchronizationTests(unittest.TestCase):
+    """Tests that ensure that multiple processes can interact with the database
+    simultaneously.
     """
 
+    pass
 
-class DatasetTest(unittest.TestCase):
+
+class DatasetTests(unittest.TestCase):
     @drop_datasets
-    def test_list_dataset_names(self):
-        self.assertIsInstance(fo.list_dataset_names(), list)
+    def test_list_datasets(self):
+        self.assertIsInstance(fo.list_datasets(), list)
 
     @drop_datasets
     def test_delete_dataset(self):
-        IGNORED_DATASET_NAMES = fo.list_dataset_names()
+        IGNORED_DATASET_NAMES = fo.list_datasets()
 
-        def list_dataset_names():
+        def list_datasets():
             return [
                 name
-                for name in fo.list_dataset_names()
+                for name in fo.list_datasets()
                 if name not in IGNORED_DATASET_NAMES
             ]
 
         dataset_names = ["test_%d" % i for i in range(10)]
 
         datasets = {name: fo.Dataset(name) for name in dataset_names}
-        self.assertListEqual(list_dataset_names(), dataset_names)
+        self.assertListEqual(list_datasets(), dataset_names)
 
         name = dataset_names.pop(0)
         datasets[name].delete()
-        self.assertListEqual(list_dataset_names(), dataset_names)
+        self.assertListEqual(list_datasets(), dataset_names)
         with self.assertRaises(fod.DoesNotExistError):
             len(datasets[name])
 
         name = dataset_names.pop(0)
         fo.delete_dataset(name)
-        self.assertListEqual(list_dataset_names(), dataset_names)
+        self.assertListEqual(list_datasets(), dataset_names)
         with self.assertRaises(fod.DoesNotExistError):
             len(datasets[name])
 
@@ -689,8 +695,30 @@ class DatasetTest(unittest.TestCase):
         dataset_name = self.test_backing_doc_class.__name__
         dataset = fo.Dataset(dataset_name)
         self.assertTrue(
-            issubclass(dataset._sample_doc_cls, foo.ODMDatasetSample)
+            issubclass(dataset._sample_doc_cls, foo.DatasetSampleDocument)
         )
+
+    @drop_datasets
+    def test_dataset_info(self):
+        dataset_name = self.test_dataset_info.__name__
+
+        dataset = fo.Dataset(dataset_name)
+
+        self.assertEqual(dataset.info, {})
+        self.assertIsInstance(dataset.info, dict)
+
+        classes = ["cat", "dog"]
+
+        dataset.info["classes"] = classes
+        dataset.save()
+
+        del dataset
+        gc.collect()  # force garbage collection
+
+        dataset2 = fo.load_dataset(dataset_name)
+
+        self.assertTrue("classes" in dataset2.info)
+        self.assertEqual(classes, dataset2.info["classes"])
 
     @drop_datasets
     def test_meta_dataset(self):
@@ -724,16 +752,23 @@ class DatasetTest(unittest.TestCase):
         self.assertIs(dataset1c, dataset1)
 
 
-class SampleTest(unittest.TestCase):
+class SampleTests(unittest.TestCase):
     @drop_datasets
     def test_backing_doc_type(self):
-        sample = fo.Sample(filepath="path/to/file.jpg")
-        self.assertIsInstance(sample._doc, foo.ODMNoDatasetSample)
+        sample = fo.Sample(filepath="/path/to/image.jpg")
+        self.assertIsInstance(sample._doc, foo.NoDatasetSampleDocument)
+
+    @drop_datasets
+    def test_abs_filepath(self):
+        filepath = "relative/file.jpg"
+        abs_filepath = os.path.abspath(filepath)
+
+        sample = fo.Sample(filepath=filepath)
+        self.assertEqual(sample.filepath, abs_filepath)
 
     @drop_datasets
     def test_get_field(self):
-        filepath = "path/to/file.jpg"
-
+        filepath = "/path/to/image.jpg"
         sample = fo.Sample(filepath=filepath)
 
         # get valid
@@ -751,11 +786,11 @@ class SampleTest(unittest.TestCase):
 
     @drop_datasets
     def test_set_field(self):
-        sample = fo.Sample(filepath="path/to/file.jpg")
+        sample = fo.Sample(filepath="/path/to/image.jpg")
 
         value = 51
 
-        # set_field create=False
+        # set_field with create=False
         with self.assertRaises(ValueError):
             sample.set_field("field1", value, create=False)
         with self.assertRaises(AttributeError):
@@ -765,8 +800,8 @@ class SampleTest(unittest.TestCase):
         with self.assertRaises(AttributeError):
             sample.field1
 
-        # set_field create=True
-        sample.set_field("field2", value, create=True)
+        # set_field
+        sample.set_field("field2", value)
         self.assertIsInstance(sample.field2, int)
         self.assertEqual(sample.get_field("field2"), value)
         self.assertEqual(sample["field2"], value)
@@ -788,7 +823,7 @@ class SampleTest(unittest.TestCase):
 
     @drop_datasets
     def test_change_value(self):
-        sample = fo.Sample(filepath="path/to/file.jpg")
+        sample = fo.Sample(filepath="/path/to/image.jpg")
 
         # init
         value = 51
@@ -806,13 +841,11 @@ class SampleTest(unittest.TestCase):
         self.assertEqual(sample.test_field, value)
 
 
-class SampleInDatasetTest(unittest.TestCase):
+class SampleInDatasetTests(unittest.TestCase):
     @drop_datasets
     def test_invalid_sample(self):
-        dataset_name = self.test_invalid_sample.__name__
-        dataset = fo.Dataset(dataset_name)
-
-        sample = fo.Sample(filepath=51)
+        dataset = fo.Dataset()
+        sample = fo.Sample(filepath="/path/to/image.jpg", tags=51)
 
         with self.assertRaises(ValidationError):
             dataset.add_sample(sample)
@@ -821,15 +854,14 @@ class SampleInDatasetTest(unittest.TestCase):
 
     @drop_datasets
     def test_dataset_clear(self):
-        dataset_name = self.test_dataset_clear.__name__
-        dataset = fo.Dataset(dataset_name)
+        dataset = fo.Dataset()
 
         self.assertEqual(len(dataset), 0)
 
         # add some samples
         num_samples = 10
         samples = [
-            fo.Sample(filepath="path/to/file_%d.jpg" % i)
+            fo.Sample(filepath="/path/to/image_%d.jpg" % i)
             for i in range(num_samples)
         ]
         dataset.add_samples(samples)
@@ -842,7 +874,7 @@ class SampleInDatasetTest(unittest.TestCase):
         # add some new samples
         num_samples = 5
         samples = [
-            fo.Sample(filepath="path/to/file_%d.jpg" % i)
+            fo.Sample(filepath="/path/to/image_%d.jpg" % i)
             for i in range(num_samples)
         ]
         dataset.add_samples(samples)
@@ -850,13 +882,12 @@ class SampleInDatasetTest(unittest.TestCase):
 
     @drop_datasets
     def test_dataset_delete_samples(self):
-        dataset_name = self.test_dataset_delete_samples.__name__
-        dataset = fo.Dataset(dataset_name)
+        dataset = fo.Dataset()
 
         # add some samples
         num_samples = 10
         samples = [
-            fo.Sample(filepath="path/to/file_%d.jpg" % i)
+            fo.Sample(filepath="/path/to/image_%d.jpg" % i)
             for i in range(num_samples)
         ]
         ids = dataset.add_samples(samples)
@@ -869,12 +900,11 @@ class SampleInDatasetTest(unittest.TestCase):
 
     @drop_datasets
     def test_getitem(self):
-        dataset_name = self.test_getitem.__name__
-        dataset = fo.Dataset(dataset_name)
+        dataset = fo.Dataset()
 
         # add some samples
         samples = [
-            fo.Sample(filepath="path/to/file_%d.jpg" % i) for i in range(10)
+            fo.Sample(filepath="/path/to/image_%d.jpg" % i) for i in range(10)
         ]
         sample_ids = dataset.add_samples(samples)
 
@@ -892,14 +922,13 @@ class SampleInDatasetTest(unittest.TestCase):
 
     @drop_datasets
     def test_autopopulated_fields(self):
-        dataset_name = self.test_autopopulated_fields.__name__
-        dataset = fo.Dataset(dataset_name)
-        sample = fo.Sample(filepath="path/to/file.jpg")
+        dataset = fo.Dataset()
+        sample = fo.Sample(filepath="/path/to/image.jpg")
 
         self.assertIsNone(sample.id)
         self.assertIsNone(sample.ingest_time)
         self.assertFalse(sample.in_dataset)
-        self.assertIsNone(sample.dataset_name)
+        self.assertIsNone(sample.dataset)
 
         dataset.add_sample(sample)
 
@@ -907,13 +936,12 @@ class SampleInDatasetTest(unittest.TestCase):
         self.assertIsInstance(sample.id, str)
         self.assertIsInstance(sample.ingest_time, datetime.datetime)
         self.assertTrue(sample.in_dataset)
-        self.assertEqual(sample.dataset_name, dataset_name)
+        self.assertIs(sample.dataset, dataset)
 
     @drop_datasets
     def test_new_fields(self):
-        dataset_name = self.test_new_fields.__name__
-        dataset = fo.Dataset(dataset_name)
-        sample = fo.Sample(filepath="path/to/file.jpg")
+        dataset = fo.Dataset()
+        sample = fo.Sample(filepath="/path/to/image.jpg")
 
         field_name = "field1"
         value = 51
@@ -934,9 +962,8 @@ class SampleInDatasetTest(unittest.TestCase):
 
     @drop_datasets
     def test_new_fields_multi(self):
-        dataset_name = self.test_new_fields_multi.__name__
-        dataset = fo.Dataset(dataset_name)
-        sample = fo.Sample(filepath="path/to/file.jpg")
+        dataset = fo.Dataset()
+        sample = fo.Sample(filepath="/path/to/image.jpg")
 
         field_name = "field1"
         value = 51
@@ -954,18 +981,19 @@ class SampleInDatasetTest(unittest.TestCase):
 
     @drop_datasets
     def test_update_sample(self):
-        dataset_name = self.test_update_sample.__name__
-        dataset = fo.Dataset(dataset_name)
-        filepath = "path/to/file.txt"
+        dataset = fo.Dataset()
+        filepath = "/path/to/image.jpg"
         sample = fo.Sample(filepath=filepath, tags=["tag1", "tag2"])
         dataset.add_sample(sample)
 
         # add duplicate filepath
         with self.assertRaises(DuplicateKeyError):
             dataset.add_sample(fo.Sample(filepath=filepath))
+
         # @todo(Tyler)
         # with self.assertRaises(DuplicateKeyError):
         #     dataset.add_samples([fo.Sample(filepath=filepath)])
+
         self.assertEqual(len(dataset), 1)
 
         # update assign
@@ -1007,17 +1035,14 @@ class SampleInDatasetTest(unittest.TestCase):
 
     @drop_datasets
     def test_add_from_another_dataset(self):
-        dataset_name = self.test_add_from_another_dataset.__name__ + "_%d"
-        dataset1 = fo.Dataset(dataset_name % 1)
-        dataset2 = fo.Dataset(dataset_name % 2)
-
-        # Dataset.add_sample()
+        dataset1 = fo.Dataset()
+        dataset2 = fo.Dataset()
 
         sample = fo.Sample(filepath="test.png")
 
         sample_id = dataset1.add_sample(sample)
         self.assertIs(dataset1[sample_id], sample)
-        self.assertEqual(sample.dataset_name, dataset1.name)
+        self.assertIs(sample.dataset, dataset1)
 
         sample_id2 = dataset2.add_sample(sample)
         self.assertNotEqual(sample_id2, sample_id)
@@ -1025,7 +1050,7 @@ class SampleInDatasetTest(unittest.TestCase):
         sample2 = dataset2[sample_id2]
         self.assertIs(dataset1[sample.id], sample)
         self.assertIsNot(dataset2[sample_id2], sample)
-        self.assertEqual(sample2.dataset_name, dataset2.name)
+        self.assertIs(sample2.dataset, dataset2)
 
         # Dataset.add_samples()
 
@@ -1033,7 +1058,7 @@ class SampleInDatasetTest(unittest.TestCase):
 
         sample_id = dataset1.add_samples([sample])[0]
         self.assertIs(dataset1[sample_id], sample)
-        self.assertEqual(sample.dataset_name, dataset1.name)
+        self.assertIs(sample.dataset, dataset1)
 
         sample_id2 = dataset2.add_samples([sample])[0]
         self.assertNotEqual(sample_id2, sample_id)
@@ -1041,34 +1066,32 @@ class SampleInDatasetTest(unittest.TestCase):
         sample2 = dataset2[sample_id2]
         self.assertIs(dataset1[sample.id], sample)
         self.assertIsNot(dataset2[sample_id2], sample)
-        self.assertEqual(sample2.dataset_name, dataset2.name)
+        self.assertIs(sample2.dataset, dataset2)
 
     @drop_datasets
     def test_copy_sample(self):
-        dataset_name = self.test_copy_sample.__name__
-        dataset = fo.Dataset(dataset_name)
+        dataset = fo.Dataset()
 
         sample = fo.Sample(filepath="test.png")
 
         sample_copy = sample.copy()
         self.assertIsNot(sample_copy, sample)
         self.assertIsNone(sample_copy.id)
-        self.assertIsNone(sample_copy.dataset_name)
+        self.assertIsNone(sample_copy.dataset)
 
         dataset.add_sample(sample)
 
         sample_copy = sample.copy()
         self.assertIsNot(sample_copy, sample)
         self.assertIsNone(sample_copy.id)
-        self.assertIsNone(sample_copy.dataset_name)
+        self.assertIsNone(sample_copy.dataset)
 
     @drop_datasets
     def test_in_memory_sample_fields(self):
-        """Ensure that any in memory samples have the field values purged when
+        """Ensures that in-memory samples have their field values purged when
         a field is deleted.
         """
-        dataset_name = self.test_in_memory_sample_fields.__name__
-        dataset = fo.Dataset(dataset_name)
+        dataset = fo.Dataset()
 
         s1 = fo.Sample("s1.png")
         s2 = fo.Sample("s2.png")
@@ -1083,24 +1106,50 @@ class SampleInDatasetTest(unittest.TestCase):
         self.assertEqual(s2.new_field, "fiftyone")
 
 
-class LabelsTest(unittest.TestCase):
+class LabelsTests(unittest.TestCase):
     @drop_datasets
     def test_create(self):
         labels = fo.Classification(label="cow", confidence=0.98)
         self.assertIsInstance(labels, fo.Classification)
 
-        with self.assertRaises(FieldDoesNotExist):
-            fo.Classification(made_up_field=100)
-
         with self.assertRaises(ValidationError):
             fo.Classification(label=100)
 
+    @drop_datasets
+    def test_copy(self):
+        dataset = fo.Dataset()
 
-class ViewTest(unittest.TestCase):
+        dataset.add_sample(
+            fo.Sample(
+                filepath="filepath1.jpg",
+                test_dets=fo.Detections(
+                    detections=[
+                        fo.Detection(
+                            label="friend",
+                            confidence=0.9,
+                            bounding_box=[0, 0, 0.5, 0.5],
+                        )
+                    ]
+                ),
+            )
+        )
+
+        sample = dataset.first()
+        sample2 = sample.copy()
+
+        self.assertIsNot(sample2, sample)
+        self.assertNotEqual(sample2.id, sample.id)
+        self.assertIsNot(sample2.test_dets, sample.test_dets)
+        det = sample.test_dets.detections[0]
+        det2 = sample2.test_dets.detections[0]
+        self.assertIsNot(det2, det)
+        self.assertNotEqual(det2.id, det.id)
+
+
+class DatasetViewTests(unittest.TestCase):
     @drop_datasets
     def test_view(self):
-        dataset_name = self.test_view.__name__
-        dataset = fo.Dataset(dataset_name)
+        dataset = fo.Dataset()
         dataset.add_sample_field(
             "labels",
             fo.EmbeddedDocumentField,
@@ -1120,7 +1169,7 @@ class ViewTest(unittest.TestCase):
         view = dataset.view()
 
         self.assertEqual(len(view), len(dataset))
-        self.assertIsInstance(view.first(), fo.Sample)
+        self.assertIsInstance(view.first(), fos.SampleView)
 
         # tags
         for sample in view.match({"tags": "train"}):
@@ -1132,12 +1181,405 @@ class ViewTest(unittest.TestCase):
         for sample in view.match({"labels.label": "label1"}):
             self.assertEqual(sample.labels.label, "label1")
 
-
-class FieldTest(unittest.TestCase):
     @drop_datasets
-    def test_field_AddDelete_in_dataset(self):
-        dataset_name = self.test_field_AddDelete_in_dataset.__name__
-        dataset = fo.Dataset(dataset_name)
+    def test_sample_view_with_filtered_fields(self):
+        dataset = fo.Dataset()
+
+        dataset.add_sample(
+            fo.Sample(
+                filepath="filepath1.jpg",
+                tags=["test"],
+                test_dets=fo.Detections(
+                    detections=[
+                        fo.Detection(
+                            label="friend",
+                            confidence=0.9,
+                            bounding_box=[0, 0, 0.5, 0.5],
+                        ),
+                        fo.Detection(
+                            label="friend",
+                            confidence=0.3,
+                            bounding_box=[0.25, 0, 0.5, 0.1],
+                        ),
+                        fo.Detection(
+                            label="stopper",
+                            confidence=0.1,
+                            bounding_box=[0, 0, 0.5, 0.5],
+                        ),
+                        fo.Detection(
+                            label="big bro",
+                            confidence=0.6,
+                            bounding_box=[0, 0, 0.1, 0.5],
+                        ),
+                    ]
+                ),
+                another_field=51,
+            )
+        )
+
+        view = (
+            dataset.view()
+            .exclude_fields(["another_field"])
+            .filter_detections("test_dets", F("confidence") > 0.5)
+        )
+
+        # modify element
+        sample_view = view.first()
+        sample_view.test_dets.detections[1].label = "MODIFIED"
+        sample_view.save()
+        # check that correct element is modified
+        detections = dataset[sample_view.id].test_dets.detections
+        self.assertEqual(detections[1].label, "friend")
+        self.assertEqual(detections[-1].label, "MODIFIED")
+
+        # complex modify
+        sample_view = view.first()
+        sample_view.test_dets.detections[0].label = "COMPLEX"
+        sample_view.test_dets.detections[1].confidence = 0.51
+        sample_view.save()
+        # check that correct elements are modified
+        detections = dataset[sample_view.id].test_dets.detections
+        self.assertEqual(detections[0].label, "COMPLEX")
+        self.assertEqual(detections[-1].confidence, 0.51)
+
+        # add element
+        with self.assertRaises(ValueError):
+            sample_view = view.first()
+            sample_view.test_dets.detections.append(
+                fo.Detection(label="NEW DET")
+            )
+            sample_view.save()
+
+        # remove element
+        with self.assertRaises(ValueError):
+            sample_view = view.first()
+            sample_view.test_dets.detections.pop()
+            sample_view.save()
+
+        # remove all elements
+        with self.assertRaises(ValueError):
+            sample_view = view.first()
+            sample_view.test_dets.detections.pop()
+            sample_view.test_dets.detections.pop()
+            sample_view.save()
+
+        # replace element
+        with self.assertRaises(ValueError):
+            sample_view = view.first()
+            sample_view.test_dets.detections[1] = fo.Detection()
+            sample_view.save()
+
+        # overwrite Detections.detections
+        with self.assertRaises(ValueError):
+            sample_view = view.first()
+            sample_view.test_dets.detections = []
+            sample_view.save()
+
+        # overwrite Detections
+        sample_view = view.first()
+        sample_view.test_dets = fo.Detections()
+        sample_view.save()
+        detections = dataset[sample_view.id].test_dets.detections
+        self.assertListEqual(detections, [])
+
+
+class ViewFieldTests(unittest.TestCase):
+    def test_field_names(self):
+        self.assertEqual(
+            F.ground_truth.to_mongo(), F("ground_truth").to_mongo()
+        )
+        self.assertEqual(
+            F.ground_truth.label.to_mongo(), F("ground_truth.label").to_mongo()
+        )
+        self.assertEqual(
+            F.ground_truth.label.to_mongo(), F("ground_truth.label").to_mongo()
+        )
+        self.assertEqual(
+            F.ground_truth.label.to_mongo(), F("ground_truth").label.to_mongo()
+        )
+
+
+class ViewExpressionTests(unittest.TestCase):
+    @drop_datasets
+    def test_comparison(self):
+        dataset = fo.Dataset()
+
+        dataset.add_samples(
+            [
+                fo.Sample(filepath="filepath1.jpg", my_int=5),
+                fo.Sample(filepath="filepath2.jpg", my_int=7),
+                fo.Sample(filepath="filepath3.jpg", my_int=1),
+                fo.Sample(filepath="filepath4.jpg", my_int=9),
+            ]
+        )
+
+        field = "my_int"
+        value = 5
+        values = [1, 5]
+
+        dataset_values = [s[field] for s in dataset]
+
+        # test `==`
+        filtered_values = [v for v in dataset_values if v == value]
+        view = dataset.match(F(field) == value)
+        view_values = [s[field] for s in view]
+        self.assertListEqual(view_values, filtered_values)
+
+        # test `!=`
+        filtered_values = [v for v in dataset_values if v != value]
+        view = dataset.match(F(field) != value)
+        view_values = [s[field] for s in view]
+        self.assertListEqual(view_values, filtered_values)
+
+        # test `>`
+        filtered_values = [v for v in dataset_values if v > value]
+        view = dataset.match(F(field) > value)
+        view_values = [s[field] for s in view]
+        self.assertListEqual(view_values, filtered_values)
+
+        # test `>=`
+        filtered_values = [v for v in dataset_values if v >= value]
+        view = dataset.match(F(field) >= value)
+        view_values = [s[field] for s in view]
+        self.assertListEqual(view_values, filtered_values)
+
+        # test `<`
+        filtered_values = [v for v in dataset_values if v < value]
+        view = dataset.match(F(field) < value)
+        view_values = [s[field] for s in view]
+        self.assertListEqual(view_values, filtered_values)
+
+        # test `<=`
+        filtered_values = [v for v in dataset_values if v <= value]
+        view = dataset.match(F(field) <= value)
+        view_values = [s[field] for s in view]
+        self.assertListEqual(view_values, filtered_values)
+
+        # test `is_in`
+        view = dataset.match(F(field).is_in(values))
+        for sample in view:
+            self.assertIn(sample[field], values)
+
+        # test `NOT is_in`
+        view = dataset.match(~(F(field).is_in(values)))
+        for sample in view:
+            self.assertNotIn(sample[field], values)
+
+    @drop_datasets
+    def test_logic(self):
+        dataset = fo.Dataset()
+
+        dataset.add_samples(
+            [
+                fo.Sample(filepath="filepath1.jpg", my_int=5),
+                fo.Sample(filepath="filepath2.jpg", my_int=7),
+                fo.Sample(filepath="filepath3.jpg", my_int=1),
+                fo.Sample(filepath="filepath4.jpg", my_int=9),
+            ]
+        )
+
+        field = "my_int"
+        value = 5
+
+        # test logical not
+        view = dataset.match(~(F(field) == value))
+        for sample in view:
+            self.assertNotEqual(sample[field], value)
+
+        # test logical and
+        bounds = [3, 6]
+        view = dataset.match((F(field) > bounds[0]) & (F(field) < bounds[1]))
+        for sample in view:
+            self.assertGreater(sample[field], bounds[0])
+            self.assertLess(sample[field], bounds[1])
+
+        # test logical or
+        view = dataset.match((F(field) < bounds[0]) | (F(field) > bounds[1]))
+        for sample in view:
+            my_int = sample[field]
+            self.assertTrue(my_int < bounds[0] or my_int > bounds[1])
+
+    @drop_datasets
+    def test_arithmetic(self):
+        dataset = fo.Dataset()
+
+        dataset.add_samples(
+            [
+                fo.Sample(filepath="filepath1.jpg", my_int=5, my_float=0.51),
+                fo.Sample(
+                    filepath="filepath2.jpg", my_int=-6, my_float=-0.965
+                ),
+            ]
+        )
+
+        # test __abs__
+        manual_ids = [
+            sample.id for sample in dataset if abs(sample.my_int) == 6
+        ]
+        view = dataset.match(abs(F("my_int")) == 6)
+        self.assertListEqual([sample.id for sample in view], manual_ids)
+
+        # test __add__
+        manual_ids = [
+            sample.id for sample in dataset if sample.my_int + 0.5 == -5.5
+        ]
+        view = dataset.match(F("my_int") + 0.5 == -5.5)
+        self.assertListEqual([sample.id for sample in view], manual_ids)
+
+        # test __ceil__
+        manual_ids = [
+            sample.id for sample in dataset if math.ceil(sample.my_float) == 1
+        ]
+        view = dataset.match(math.ceil(F("my_float")) == 1)
+        self.assertListEqual([sample.id for sample in view], manual_ids)
+
+        # test __floor__
+        manual_ids = [
+            sample.id
+            for sample in dataset
+            if math.floor(sample.my_float) == -1
+        ]
+        view = dataset.match(math.floor(F("my_float")) == -1)
+        self.assertListEqual([sample.id for sample in view], manual_ids)
+
+        # test __round__
+        manual_ids = [
+            sample.id for sample in dataset if round(sample.my_float) == -1
+        ]
+        view = dataset.match(round(F("my_float")) == -1)
+        self.assertListEqual([sample.id for sample in view], manual_ids)
+
+    @drop_datasets
+    def test_array(self):
+        dataset_name = self.test_array.__name__
+        dataset = fo.Dataset()
+
+        dataset.add_samples(
+            [
+                fo.Sample(
+                    filepath="filepath1.jpg",
+                    tags=["train"],
+                    my_int=5,
+                    my_list=["a", "b"],
+                ),
+                fo.Sample(
+                    filepath="filepath2.jpg",
+                    tags=["train"],
+                    my_int=6,
+                    my_list=["b", "c"],
+                ),
+                fo.Sample(
+                    filepath="filepath3.jpg",
+                    tags=["test"],
+                    my_int=7,
+                    my_list=["c", "d"],
+                ),
+            ]
+        )
+
+        # test contains
+        tag = "train"
+        manual_ids = [sample.id for sample in dataset if tag in sample.tags]
+        view = dataset.match(F("tags").contains(tag))
+        self.assertListEqual([sample.id for sample in view], manual_ids)
+
+        # test is_in
+        my_ints = [6, 7, 8]
+        manual_ids = [
+            sample.id for sample in dataset if sample.my_int in my_ints
+        ]
+        view = dataset.match(F("my_int").is_in(my_ints))
+        self.assertListEqual([sample.id for sample in view], manual_ids)
+
+        # test __getitem__
+        idx = 1
+        value = "c"
+        manual_ids = [
+            sample.id for sample in dataset if sample.my_list[idx] == value
+        ]
+        view = dataset.match(F("my_list")[idx] == value)
+        self.assertListEqual([sample.id for sample in view], manual_ids)
+
+    @drop_datasets
+    def test_str(self):
+        self.dataset = fo.Dataset()
+        self.dataset.add_samples(
+            [
+                fo.Sample(filepath="test1.jpg", test="test1.jpg"),
+                fo.Sample(filepath="test2.jpg", test="test2.jpg"),
+                fo.Sample(filepath="test3.jpg", test="test3.jpg"),
+            ]
+        )
+
+        # test starts_with
+        self.assertEqual(
+            len(self.dataset.match(F("test").starts_with("test"))), 3
+        )
+        self.assertEqual(
+            len(self.dataset.match(F("test").starts_with("TEST"))), 0
+        )
+        self.assertEqual(
+            len(
+                self.dataset.match(
+                    F("test").starts_with("TEST", case_sensitive=False)
+                )
+            ),
+            3,
+        )
+
+        # test ends_with
+        self.assertEqual(
+            len(self.dataset.match(F("test").ends_with("1.jpg"))), 1
+        )
+        self.assertEqual(
+            len(self.dataset.match(F("test").ends_with("1.JPG"))), 0
+        )
+        self.assertEqual(
+            len(
+                self.dataset.match(
+                    F("test").ends_with("1.JPG", case_sensitive=False)
+                )
+            ),
+            1,
+        )
+
+        # test contains_str
+        self.assertEqual(
+            len(self.dataset.match(F("test").contains_str("1.j"))), 1
+        )
+        self.assertEqual(
+            len(self.dataset.match(F("test").contains_str("1.J"))), 0
+        )
+        self.assertEqual(
+            len(
+                self.dataset.match(
+                    F("test").contains_str("1.J", case_sensitive=False)
+                )
+            ),
+            1,
+        )
+
+        # test matches_str
+        self.assertEqual(
+            len(self.dataset.match(F("test").matches_str("test1.jpg"))), 1
+        )
+        self.assertEqual(
+            len(self.dataset.match(F("test").matches_str("TEST1.JPG"))), 0
+        )
+        self.assertEqual(
+            len(
+                self.dataset.match(
+                    F("test").matches_str("TEST1.JPG", case_sensitive=False)
+                )
+            ),
+            1,
+        )
+
+
+class SampleFieldTests(unittest.TestCase):
+    @drop_datasets
+    def test_field_add_delete_in_dataset(self):
+        dataset = fo.Dataset()
         id1 = dataset.add_sample(fo.Sample("1.jpg"))
         id2 = dataset.add_sample(fo.Sample("2.jpg"))
         sample1 = dataset[id1]
@@ -1234,7 +1676,7 @@ class FieldTest(unittest.TestCase):
             self.assertIsNone(sample.to_dict()[field_name])
 
     @drop_datasets
-    def test_field_GetSetClear_no_dataset(self):
+    def test_field_get_set_clear_no_dataset(self):
         filename = "1.jpg"
         tags = ["tag1", "tag2"]
         sample = fo.Sample(filepath=filename, tags=tags)
@@ -1268,9 +1710,9 @@ class FieldTest(unittest.TestCase):
 
         # set field (new)
         with self.assertRaises(ValueError):
-            sample.set_field("field_1", 51)
+            sample.set_field("field_1", 51, create=False)
 
-        sample.set_field("field_1", 51, create=True)
+        sample.set_field("field_1", 51)
         self.assertIn("field_1", sample.field_names)
         self.assertEqual(sample.get_field("field_1"), 51)
         self.assertEqual(sample["field_1"], 51)
@@ -1293,9 +1735,8 @@ class FieldTest(unittest.TestCase):
             sample.field_1
 
     @drop_datasets
-    def test_field_GetSetClear_in_dataset(self):
-        dataset_name = self.test_field_GetSetClear_in_dataset.__name__
-        dataset = fo.Dataset(dataset_name)
+    def test_field_get_set_clear_in_dataset(self):
+        dataset = fo.Dataset()
         dataset.add_sample(fo.Sample("1.jpg"))
         dataset.add_sample(fo.Sample("2.jpg"))
 
@@ -1314,8 +1755,8 @@ class FieldTest(unittest.TestCase):
 
     @drop_datasets
     def test_vector_array_fields(self):
-        dataset1 = fo.Dataset("test_one")
-        dataset2 = fo.Dataset("test_two")
+        dataset1 = fo.Dataset()
+        dataset2 = fo.Dataset()
 
         sample1 = fo.Sample(
             filepath="img.png",
@@ -1336,12 +1777,17 @@ class FieldTest(unittest.TestCase):
             self.assertIsInstance(fields["array_field"], fo.ArrayField)
 
 
-class SerializationTest(unittest.TestCase):
+class SerializationTests(unittest.TestCase):
     def test_embedded_document(self):
         label1 = fo.Classification(label="cat", logits=np.arange(4))
 
         label2 = fo.Classification(label="cat", logits=np.arange(4))
-        self.assertEqual(label2, label1)
+
+        d1 = label1.to_dict()
+        d2 = label2.to_dict()
+        d1.pop("_id")
+        d2.pop("_id")
+        self.assertDictEqual(d1, d2)
 
         d = label1.to_dict()
         self.assertEqual(fo.Classification.from_dict(d), label1)
@@ -1353,10 +1799,12 @@ class SerializationTest(unittest.TestCase):
         self.assertEqual(fo.Classification.from_json(s), label1)
 
     def test_sample_no_dataset(self):
+        """This test only works if the samples do not have Classification or
+        Detection fields because of the autogenerated ObjectIDs.
+        """
         sample1 = fo.Sample(
             filepath="~/Desktop/test.png",
             tags=["test"],
-            ground_truth=fo.Classification(label="cat", logits=np.arange(4)),
             vector=np.arange(5),
             array=np.ones((2, 3)),
             float=5.1,
@@ -1367,27 +1815,29 @@ class SerializationTest(unittest.TestCase):
         sample2 = fo.Sample(
             filepath="~/Desktop/test.png",
             tags=["test"],
-            ground_truth=fo.Classification(label="cat", logits=np.arange(4)),
             vector=np.arange(5),
             array=np.ones((2, 3)),
             float=5.1,
             bool=True,
             int=51,
         )
-        self.assertEqual(sample1, sample2)
+        self.assertDictEqual(sample1.to_dict(), sample2.to_dict())
 
-        self.assertEqual(fo.Sample.from_dict(sample1.to_dict()), sample1)
+        self.assertEqual(
+            fo.Sample.from_dict(sample1.to_dict()).to_dict(), sample1.to_dict()
+        )
 
     @drop_datasets
     def test_sample_in_dataset(self):
-        dataset_name = self.test_sample_in_dataset.__name__
-        dataset1 = fo.Dataset(dataset_name + "1")
-        dataset2 = fo.Dataset(dataset_name + "2")
+        """This test only works if the samples do not have Classification or
+        Detection fields because of the autogenerated ObjectIDs.
+        """
+        dataset1 = fo.Dataset()
+        dataset2 = fo.Dataset()
 
         sample1 = fo.Sample(
             filepath="~/Desktop/test.png",
             tags=["test"],
-            ground_truth=fo.Classification(label="cat", logits=np.arange(4)),
             vector=np.arange(5),
             array=np.ones((2, 3)),
             float=5.1,
@@ -1398,7 +1848,6 @@ class SerializationTest(unittest.TestCase):
         sample2 = fo.Sample(
             filepath="~/Desktop/test.png",
             tags=["test"],
-            ground_truth=fo.Classification(label="cat", logits=np.arange(4)),
             vector=np.arange(5),
             array=np.ones((2, 3)),
             float=5.1,
@@ -1406,7 +1855,7 @@ class SerializationTest(unittest.TestCase):
             int=51,
         )
 
-        self.assertEqual(sample1, sample2)
+        self.assertDictEqual(sample1.to_dict(), sample2.to_dict())
 
         dataset1.add_sample(sample1)
         dataset2.add_sample(sample2)
@@ -1419,14 +1868,25 @@ class SerializationTest(unittest.TestCase):
         self.assertFalse(s1.in_dataset)
         self.assertNotEqual(s1, sample1)
 
-        self.assertEqual(s1, s2)
+        self.assertDictEqual(s1.to_dict(), s2.to_dict())
 
 
-class AggregationTest(unittest.TestCase):
+class SampleCollectionTests(unittest.TestCase):
+    @drop_datasets
+    def test_first_last(self):
+        dataset = fo.Dataset()
+        dataset.add_samples([fo.Sample("test_%d.png" % i) for i in range(3)])
+
+        self.assertIsInstance(dataset.first(), fo.Sample)
+        self.assertIsInstance(dataset.last(), fo.Sample)
+        self.assertIsInstance(dataset.view().first(), fos.SampleView)
+        self.assertIsInstance(dataset.view().last(), fos.SampleView)
+
+
+class AggregationTests(unittest.TestCase):
     @drop_datasets
     def test_aggregate(self):
-        dataset_name = self.test_aggregate.__name__
-        dataset = fo.Dataset(dataset_name)
+        dataset = fo.Dataset()
         dataset.add_samples(
             [
                 fo.Sample("1.jpg", tags=["tag1"]),
@@ -1451,6 +1911,218 @@ class AggregationTest(unittest.TestCase):
                 tag = d["_id"]
                 count = d["count"]
                 self.assertEqual(count, counts[tag])
+
+
+class ViewStageTests(unittest.TestCase):
+    @drop_datasets
+    def setUp(self):
+        self.dataset = fo.Dataset()
+        self.sample1 = fo.Sample(filepath="test_one.png")
+        self.sample2 = fo.Sample(filepath="test_two.png")
+        self.dataset.add_sample(self.sample1)
+        self.dataset.add_sample(self.sample2)
+
+    def test_exclude(self):
+        result = list(self.dataset.exclude([self.sample1.id]))
+        self.assertIs(len(result), 1)
+        self.assertEqual(result[0].id, self.sample2.id)
+
+    def test_exclude_fields(self):
+        self.dataset.add_sample_field("exclude_fields_field1", fo.IntField)
+        self.dataset.add_sample_field("exclude_fields_field2", fo.IntField)
+
+        for sample in self.dataset.exclude_fields(["exclude_fields_field1"]):
+            self.assertIsNone(sample.selected_field_names)
+            self.assertSetEqual(
+                sample.excluded_field_names, {"exclude_fields_field1"}
+            )
+            with self.assertRaises(AttributeError):
+                sample.exclude_fields_field1
+
+            self.assertIsNone(sample.exclude_fields_field2)
+
+    def test_exists(self):
+        self.sample1["exists"] = True
+        self.sample1.save()
+        result = list(self.dataset.exists("exists"))
+        self.assertIs(len(result), 1)
+        self.assertEqual(result[0].id, self.sample1.id)
+
+    def test_filter_field(self):
+        self.sample1["test_class"] = fo.Classification(label="friend")
+        self.sample1.save()
+
+        self.sample2["test_class"] = fo.Classification(label="enemy")
+        self.sample2.save()
+
+        view = self.dataset.filter_field("test_class", F("label") == "friend")
+
+        self.assertEqual(len(view.exists("test_class")), 1)
+        for sample in view:
+            if sample.test_class is not None:
+                self.assertEqual(sample.test_class.label, "friend")
+
+    def test_filter_classifications(self):
+        self.sample1["test_clfs"] = fo.Classifications(
+            classifications=[
+                fo.Classification(label="friend", confidence=0.9),
+                fo.Classification(label="friend", confidence=0.3),
+                fo.Classification(label="stopper", confidence=0.1),
+                fo.Classification(label="big bro", confidence=0.6),
+            ]
+        )
+        self.sample1.save()
+        self.sample2["test_clfs"] = fo.Classifications(
+            classifications=[
+                fo.Classification(label="friend", confidence=0.99),
+                fo.Classification(label="tricam", confidence=0.2),
+                fo.Classification(label="hex", confidence=0.8),
+            ]
+        )
+        self.sample2.save()
+
+        view = self.dataset.filter_classifications(
+            "test_clfs", (F("confidence") > 0.5) & (F("label") == "friend")
+        )
+
+        for sample in view:
+            for clf in sample.test_clfs.classifications:
+                self.assertGreater(clf.confidence, 0.5)
+                self.assertEqual(clf.label, "friend")
+
+    def test_filter_detections(self):
+        self.sample1["test_dets"] = fo.Detections(
+            detections=[
+                fo.Detection(
+                    label="friend",
+                    confidence=0.9,
+                    bounding_box=[0, 0, 0.5, 0.5],
+                ),
+                fo.Detection(
+                    label="friend",
+                    confidence=0.3,
+                    bounding_box=[0.25, 0, 0.5, 0.1],
+                ),
+                fo.Detection(
+                    label="stopper",
+                    confidence=0.1,
+                    bounding_box=[0, 0, 0.5, 0.5],
+                ),
+                fo.Detection(
+                    label="big bro",
+                    confidence=0.6,
+                    bounding_box=[0, 0, 0.1, 0.5],
+                ),
+            ]
+        )
+        self.sample1.save()
+        self.sample2["test_dets"] = fo.Detections(
+            detections=[
+                fo.Detection(
+                    label="friend", confidence=0.99, bounding_box=[0, 0, 1, 1],
+                ),
+                fo.Detection(
+                    label="tricam",
+                    confidence=0.2,
+                    bounding_box=[0, 0, 0.5, 0.5],
+                ),
+                fo.Detection(
+                    label="hex",
+                    confidence=0.8,
+                    bounding_box=[0.35, 0, 0.2, 0.25],
+                ),
+            ]
+        )
+        self.sample2.save()
+
+        view = self.dataset.filter_detections(
+            "test_dets", (F("confidence") > 0.5) & (F("label") == "friend")
+        )
+
+        for sample in view:
+            for det in sample.test_dets.detections:
+                self.assertGreater(det.confidence, 0.5)
+                self.assertEqual(det.label, "friend")
+
+    def test_limit(self):
+        result = list(self.dataset.limit(1))
+        self.assertIs(len(result), 1)
+
+    def test_match(self):
+        self.sample1["value"] = "value"
+        self.sample1.save()
+        result = list(self.dataset.match({"value": "value"}))
+        self.assertIs(len(result), 1)
+        self.assertEqual(result[0].id, self.sample1.id)
+
+    def test_match_tag(self):
+        self.sample1.tags.append("test")
+        self.sample1.save()
+        result = list(self.dataset.match_tag("test"))
+        self.assertIs(len(result), 1)
+        self.assertEqual(result[0].id, self.sample1.id)
+
+    def test_match_tags(self):
+        self.sample1.tags.append("test")
+        self.sample1.save()
+        result = list(self.dataset.match_tags(["test"]))
+        self.assertIs(len(result), 1)
+        self.assertEqual(result[0].id, self.sample1.id)
+
+    def test_re_match(self):
+        result = list(self.dataset.match(F("filepath").re_match(r"two\.png$")))
+        self.assertIs(len(result), 1)
+        self.assertTrue(result[0].filepath.endswith("two.png"))
+
+        # case-insentive match
+        result = list(
+            self.dataset.match(
+                F("filepath").re_match(r"TWO\.PNG$", options="i")
+            )
+        )
+        self.assertIs(len(result), 1)
+        self.assertTrue(result[0].filepath.endswith("two.png"))
+
+    def test_mongo(self):
+        result = list(self.dataset.mongo([{"$limit": 1}]))
+        self.assertIs(len(result), 1)
+        self.assertEqual(result[0].id, self.sample1.id)
+
+    def test_select(self):
+        result = list(self.dataset.select([self.sample1.id]))
+        self.assertIs(len(result), 1)
+        self.assertEqual(result[0].id, self.sample1.id)
+
+    def test_select_fields(self):
+        self.dataset.add_sample_field("select_fields_field", fo.IntField)
+
+        for sample in self.dataset.select_fields():
+            self.assertSetEqual(
+                sample.selected_field_names, set(default_sample_fields())
+            )
+            self.assertIsNone(sample.excluded_field_names)
+            sample.filepath
+            sample.metadata
+            sample.tags
+            with self.assertRaises(AttributeError):
+                sample.select_fields_field
+
+    def test_skip(self):
+        result = list(self.dataset.sort_by("filepath").skip(1))
+        self.assertIs(len(result), 1)
+        self.assertEqual(result[0].id, self.sample2.id)
+
+    def test_sort_by(self):
+        result = list(self.dataset.sort_by("filepath"))
+        self.assertIs(len(result), 2)
+        self.assertEqual(result[0].id, self.sample1.id)
+        result = list(self.dataset.sort_by("filepath", reverse=True))
+        self.assertIs(len(result), 2)
+        self.assertEqual(result[0].id, self.sample2.id)
+
+    def test_take(self):
+        result = list(self.dataset.take(1))
+        self.assertIs(len(result), 1)
 
 
 if __name__ == "__main__":

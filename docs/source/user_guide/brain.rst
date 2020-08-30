@@ -8,16 +8,24 @@ The FiftyOne Brain provides powerful machine learning techniques that are
 designed to transform how you curate your data from an art into a measurable
 science.
 
+.. note::
+
+    The FiftyOne Brain is a separate Python package that is bundled with
+    FiftyOne. Although it is closed-source, it is licensed as freeware, and you
+    have permission to use it for commercial or non-commercial purposes. See
+    `the license <https://github.com/voxel51/fiftyone/blob/develop/LICENSE-BRAIN>`_
+    for more details.
+
 The FiftyOne Brain methods are useful across the stages of the machine learning
 workflow:
 
 * **Uniqueness**: During the training loop for a model, the best results will
   be seen when training on unique data. The FiftyOne Brain provides a
   `uniqueness` measure for images that compare the content of every image in a
-  |Dataset2|_ with all other images.  Uniqueness operates on raw images and does
-  not require any prior annotation on the data.  It is hence very useful in the
-  early stages of the machine learning workflow when you are likely asking
-  "What data should I select to annotate?"
+  |WhatIsAFiftyOneDataset| with all other images. Uniqueness operates on raw
+  images and does not require any prior annotation on the data. It is hence
+  very useful in the early stages of the machine learning workflow when you are
+  likely asking "What data should I select to annotate?"
 
 * **Mistakenness**: Annotations mistakes create an artificial ceiling on the
   performance of your models.  However, finding these mistakes by hand is at
@@ -39,10 +47,7 @@ workflow:
 Each of these functions has a detailed :doc:`tutorial <../tutorials/index>`
 demonstrating a workflow.
 
-.. note::
-
-    FiftyOne Brain operations require the installation of `torch` and
-    `tensorflow`
+.. _brain-image-uniqueness:
 
 Image Uniqueness
 ________________
@@ -86,6 +91,8 @@ most other samples are more unique.
     Check out the :doc:`uniqueness tutorial<../tutorials/uniqueness>` to see an
     example use case of the Brain's uniqueness method.
 
+.. _brain-label-mistakes:
+
 Label Mistakes
 ______________
 
@@ -120,6 +127,8 @@ ranks samples for which your prediction model is highly confident but wrong
 
     Check out the :doc:`label mistakes tutorial<../tutorials/label_mistakes>`
     to see an example use case of the Brain's mistakenness method.
+
+.. _brain-sample-hardness:
 
 Sample Hardness
 _______________

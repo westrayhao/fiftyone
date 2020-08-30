@@ -8,8 +8,31 @@ https://www.sphinx-doc.org/en/master/usage/configuration.html
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
+import os
+import re
+import sys
+
+sys.path.insert(0, os.path.abspath("."))
+
+from custom_directives import (
+    CustomButtonDirective,
+    CustomCalloutItemDirective,
+    CustomCardItemDirective,
+)
+from redirects import generate_redirects
 
 import fiftyone.constants as foc
+
+
+with open("../../setup.py") as f:
+    setup_version = re.search(r'version="(.+?)"', f.read()).group(1)
+
+if setup_version != foc.VERSION:
+    raise RuntimeError(
+        "FiftyOne version in setup.py (%r) does not match installed version "
+        "(%r). If this is a dev install, reinstall with `pip install -e .` "
+        "and try again." % (setup_version, foc.VERSION)
+    )
 
 
 # -- Path setup --------------------------------------------------------------
@@ -18,6 +41,7 @@ import fiftyone.constants as foc
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 #
+
 
 # -- Project information -----------------------------------------------------
 
@@ -37,16 +61,21 @@ extensions = [
     "sphinx.ext.intersphinx",
     "sphinx.ext.napoleon",
     "sphinx.ext.autosectionlabel",
-    "m2r",
     "nbsphinx",
     "sphinx_tabs.tabs",
     "sphinx_copybutton",
+    "autodocsumm",
 ]
 
 # Types of class members to generate documentation for.
-autodoc_default_options = {"members": True, "inherited-members": True}
+autodoc_default_options = {
+    "members": True,
+    "inherited-members": True,
+    "member-order": "bysource",
+    "autosummary": True,
+    "autosummary-no-nesting": True,
+}
 autodoc_inherit_docstrings = True
-autodoc_member_order = "bysource"
 autoclass_content = "class"
 
 # Add any paths that contain templates here, relative to this directory.
@@ -55,9 +84,6 @@ templates_path = ["_templates"]
 # The suffix(es) of source filenames.
 # You can specify multiple suffix as a list of strings.
 source_suffix = [".rst", ".md"]
-
-# Parse relative links to MD files into ref and doc directives.
-m2r_parse_relative_links = True
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
@@ -78,6 +104,9 @@ nbsphinx_prolog = """
     :download:`{{ env.doc2path(env.docname, base=None) }} </{{ env.doc2path(env.docname, base=None) }}>`
 
 """
+
+# Path to the redirects file, relative to `source/`
+redirects_file = "redirects"
 
 # -- Options for HTML output -------------------------------------------------
 
@@ -100,6 +129,10 @@ html_static_path = ["_static"]
 html_css_files = ["css/voxel51-website.css", "css/custom.css"]
 html_js_files = ["js/voxel51-website.js", "js/custom.js"]
 
+# Prevent RST source files from being included in output
+html_copy_source = False
+
+# Links - copied from website config
 html_context = {
     "address_main_line1": "410 N 4th Ave, 3rd Floor",
     "address_main_line2": "Ann Arbor, MI 48104",
@@ -137,3 +170,16 @@ html_context = {
     "link_voxel51_linkedin": "https://www.linkedin.com/company/voxel51/",
     "link_voxel51_twitter": "https://twitter.com/voxel51",
 }
+
+# -- Custom app setup --------------------------------------------------------
+
+
+def setup(app):
+    # Generate page redirects
+    app.add_config_value("redirects_file", "redirects", "env")
+    app.connect("builder-inited", generate_redirects)
+
+    # Custom directives
+    app.add_directive("custombutton", CustomButtonDirective)
+    app.add_directive("customcalloutitem", CustomCalloutItemDirective)
+    app.add_directive("customcarditem", CustomCardItemDirective)
