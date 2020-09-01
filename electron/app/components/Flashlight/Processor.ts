@@ -80,10 +80,6 @@ class Processor {
   containerHeight: number;
   count: number;
   liveTop: number;
-  itemsPerRequest: number;
-  margin: number;
-  rootIndex: number;
-  private socket: any;
   private scrollDirection: ScrollDirection = ScrollDirection.Down;
   private bases: Bases;
 
@@ -126,7 +122,10 @@ class Processor {
       this.margin
     );
 
-    this.bases;
+    this.bases = {
+      FIRST: {},
+      SECOND: {},
+    };
   }
 
   private validate(): void {
@@ -247,6 +246,7 @@ class Processor {
     );
     return data === "pending" ? data : data[index];
   }
+
   /**
    *
    * @param segmentIndex
@@ -300,6 +300,23 @@ class Processor {
 
   /**
    *
+   * @param startIndex
+   */
+  getLayout(startIndex: number): SegmentLayout {
+    let numItems = 0;
+    let index = startIndex;
+    const numItemsInLayout = Processor.getNumItemsInLayout(
+      this.containerWidth / this.containerHeight,
+      this.baseNumCols
+    );
+    const layout = { rows: [], top: null, height: null };
+    while (numItems < numItemsInLayout) {
+      index = layout.rows.push(this.getItemRow(index));
+    }
+  }
+
+  /**
+   *
    * @param segmentIndex
    */
   getSegmentItemIndices(segmentIndex: number): Array<number> {
@@ -308,9 +325,9 @@ class Processor {
     }
 
     const start = segmentIndex * this.itemsPerRequest;
-    this.segmentItemIndicesCache[segmentIndex] = [
-      ...Array(Math.min(this.itemsPerRequest, this.count - start)).keys(),
-    ].map((i) => start + i);
+    this.segmentItemIndicesCache[segmentIndex] = Array.from(
+      Array(Math.min(this.itemsPerRequest, this.count - start)).keys()
+    ).map((i) => start + i);
 
     return this.segmentItemIndicesCache[segmentIndex];
   }
@@ -348,6 +365,13 @@ class Processor {
     }
   }
 
+  private static getNumItemsInLayout(
+    aspectRatio: number,
+    baseNumCols: number
+  ): number {
+    return (baseNumCols / aspectRatio) * 2;
+  }
+
   /**
    *
    * @param socket
@@ -375,6 +399,7 @@ class Processor {
   ): number {
     return (containerWidth - (baseNumCols + 1) * margin) / baseNumCols;
   }
+
   /**
    *
    * @param itemIndex
