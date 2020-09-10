@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from "react";
-import { useRecoilState, useRecoilValue } from "recoil";
-import styled from "styled-components";
+import React, { useState, useEffect, useRef, useContext } from "react";
+import { useRecoilState, useRecoilValue, useSetRecoilState } from "recoil";
+import styled, { ThemeContext } from "styled-components";
 
 import { Grid, Sticky } from "semantic-ui-react";
 
@@ -8,12 +8,11 @@ import DisplayOptionsSidebar from "../components/DisplayOptionsSidebar";
 import ImageContainerHeader from "../components/ImageContainerHeader";
 import Samples from "../components/Samples";
 import ViewBar from "../components/ViewBar/ViewBar";
-import { VerticalSpacer } from "../components/utils";
 
 import * as atoms from "../recoil/atoms";
 import * as selectors from "../recoil/selectors";
 import { useResizeHandler, useScrollHandler } from "../utils/hooks";
-import { VALID_LABEL_TYPES, VALID_SCALAR_TYPES } from "../utils/labels";
+import { makeLabelNameGroups } from "../utils/labels";
 
 const Root = styled.div`
   .ui.grid > .sidebar-column {
@@ -27,7 +26,14 @@ const Root = styled.div`
   }
 `;
 
-const SamplesContainer = (props) => {
+const DisplayOptionsWrapper = (props) => {
+  const {
+    containerRef,
+    sidebarRef,
+    sidebarHeight,
+    displayProps,
+    headerHeight,
+  } = props;
   const {
     activeTags,
     activeLabels,
@@ -35,40 +41,20 @@ const SamplesContainer = (props) => {
     setActiveTags,
     setActiveLabels,
     setActiveOther,
-    labelData,
-  } = props.displayProps;
-
-  const [showSidebar, setShowSidebar] = useRecoilState(atoms.sidebarVisible);
-  const [sidebarHeight, setSidebarHeight] = useState("unset");
-  const [stuck, setStuck] = useState(false);
-  const datasetName = useRecoilValue(selectors.datasetName);
-  const numSamples = useRecoilValue(selectors.numSamples);
+  } = displayProps;
+  const labelSampleCounts = useRecoilValue(selectors.labelSampleCounts);
   const tagNames = useRecoilValue(selectors.tagNames);
   const tagSampleCounts = useRecoilValue(selectors.tagSampleCounts);
+  const filters = useRecoilValue(selectors.labelFilters);
+  const setModalFilters = useSetRecoilState(selectors.modalLabelFilters);
+
   const fieldSchema = useRecoilValue(selectors.fieldSchema);
   const labelNames = useRecoilValue(selectors.labelNames);
   const labelTypes = useRecoilValue(selectors.labelTypes);
-  const labelSampleCounts = useRecoilValue(selectors.labelSampleCounts);
-  const colorMapping = useRecoilValue(selectors.labelColorMapping);
 
-  const containerRef = useRef();
-  const stickyHeaderRef = useRef();
-  const sidebarRef = useRef();
-
-  const labelNameGroups = {
-    labels: [],
-    scalars: [],
-    unsupported: [],
-  };
-  for (const name of labelNames) {
-    if (VALID_LABEL_TYPES.includes(labelTypes[name])) {
-      labelNameGroups.labels.push({ name, type: labelTypes[name] });
-    } else if (VALID_SCALAR_TYPES.includes(fieldSchema[name])) {
-      labelNameGroups.scalars.push({ name });
-    } else {
-      labelNameGroups.unsupported.push({ name });
-    }
-  }
+  useEffect(() => {
+    setModalFilters(filters);
+  }, [filters]);
 
   const getDisplayOptions = (values, counts, selected) => {
     return [...values].sort().map(({ name, type }) => ({
@@ -78,18 +64,81 @@ const SamplesContainer = (props) => {
       selected: Boolean(selected[name]),
     }));
   };
-  const handleSetDisplayOption = (selected, setSelected) => (entry) => {
+  const handleSetDisplayOption = (setSelected) => (entry) => {
     setSelected((selected) => ({
       ...selected,
       [entry.name]: entry.selected,
     }));
   };
 
+  const labelNameGroups = makeLabelNameGroups(
+    fieldSchema,
+    labelNames,
+    labelTypes
+  );
+
+  return (
+    <Grid.Column className="sidebar-column">
+      <Sticky
+        context={containerRef}
+        offset={headerHeight}
+        styleElement={{
+          paddingTop: "1rem",
+        }}
+      >
+        <DisplayOptionsSidebar
+          tags={getDisplayOptions(
+            tagNames.map((t) => ({ name: t })),
+            tagSampleCounts,
+            activeTags
+          )}
+          labels={getDisplayOptions(
+            labelNameGroups.labels,
+            labelSampleCounts,
+            activeLabels
+          )}
+          onSelectTag={handleSetDisplayOption(setActiveTags)}
+          onSelectLabel={handleSetDisplayOption(setActiveLabels)}
+          scalars={getDisplayOptions(
+            labelNameGroups.scalars,
+            labelSampleCounts,
+            activeOther
+          )}
+          onSelectScalar={handleSetDisplayOption(setActiveOther)}
+          unsupported={getDisplayOptions(
+            labelNameGroups.unsupported,
+            labelSampleCounts,
+            activeLabels
+          )}
+          style={{
+            maxHeight: sidebarHeight,
+            overflowY: "auto",
+            overflowX: "hidden",
+            paddingRight: 25,
+            marginRight: -25,
+            scrollbarWidth: "thin",
+          }}
+          ref={sidebarRef}
+        />
+      </Sticky>
+    </Grid.Column>
+  );
+};
+
+const SamplesContainer = (props) => {
+  const [showSidebar, setShowSidebar] = useRecoilState(atoms.sidebarVisible);
+  const datasetName = useRecoilValue(selectors.datasetName);
+  const numSamples = useRecoilValue(selectors.numSamples);
+  const theme = useContext(ThemeContext);
+
+  const containerRef = useRef();
+  const stickyHeaderRef = useRef();
+  const sidebarRef = useRef();
+  const [sidebarHeight, setSidebarHeight] = useState("unset");
   let headerHeight = 0;
   if (stickyHeaderRef.current && stickyHeaderRef.current.stickyRect) {
     headerHeight = stickyHeaderRef.current.stickyRect.height;
   }
-
   const updateSidebarHeight = () => {
     if (sidebarRef.current) {
       setSidebarHeight(
@@ -103,70 +152,31 @@ const SamplesContainer = (props) => {
 
   return (
     <Root ref={containerRef} showSidebar={showSidebar}>
-      <VerticalSpacer opaque height={5} />
       <Sticky
         ref={stickyHeaderRef}
         context={containerRef}
-        onStick={() => setStuck(true)}
-        onUnstick={() => setStuck(false)}
+        styleElement={{
+          background: theme.background,
+        }}
       >
         <ViewBar />
-        <VerticalSpacer opaque height={5} />
         <ImageContainerHeader
           datasetName={datasetName}
           total={numSamples}
           showSidebar={showSidebar}
           onShowSidebar={setShowSidebar}
         />
-        <VerticalSpacer opaque height={5} />
       </Sticky>
       <Grid>
         {showSidebar ? (
-          <Grid.Column className="sidebar-column">
-            <Sticky context={containerRef} offset={headerHeight}>
-              <DisplayOptionsSidebar
-                colorMapping={colorMapping}
-                tags={getDisplayOptions(
-                  tagNames.map((t) => ({ name: t })),
-                  tagSampleCounts,
-                  activeTags
-                )}
-                labels={getDisplayOptions(
-                  labelNameGroups.labels,
-                  labelSampleCounts,
-                  activeLabels
-                )}
-                onSelectTag={handleSetDisplayOption(activeTags, setActiveTags)}
-                onSelectLabel={handleSetDisplayOption(
-                  activeLabels,
-                  setActiveLabels
-                )}
-                scalars={getDisplayOptions(
-                  labelNameGroups.scalars,
-                  labelSampleCounts,
-                  activeOther
-                )}
-                onSelectScalar={handleSetDisplayOption(
-                  activeOther,
-                  setActiveOther
-                )}
-                unsupported={getDisplayOptions(
-                  labelNameGroups.unsupported,
-                  labelSampleCounts,
-                  activeLabels
-                )}
-                style={{
-                  maxHeight: sidebarHeight,
-                  overflowY: "auto",
-                  overflowX: "hidden",
-                  paddingRight: 25,
-                  marginRight: -25,
-                  scrollbarWidth: "thin",
-                }}
-                ref={sidebarRef}
-              />
-            </Sticky>
-          </Grid.Column>
+          <DisplayOptionsWrapper
+            sidebarRef={sidebarRef}
+            stickyHeaderRef={stickyHeaderRef}
+            containerRef={containerRef}
+            sidebarHeight={sidebarHeight}
+            headerHeight={headerHeight}
+            {...props}
+          />
         ) : null}
         <Grid.Column className="content-column">
           <Samples {...props} />

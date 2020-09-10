@@ -29,14 +29,59 @@ const SearchResultsWrapper = styled.div`
 const SliderContainer = styled.div`
   font-weight: bold;
   display: flex;
-  padding: 0.5rem;
+  padding: 1.5rem 0.5rem 0.5rem;
+  line-height: 1.9rem;
 `;
 
 const Slider = styled(SliderUnstyled)`
   && {
     color: ${({ theme }) => theme.brand};
-    margin: 0.1rem 0.75rem 0 0.75rem;
+    margin: 0 1rem 0 0.8rem;
     height: 3px;
+  }
+
+  .rail {
+    height: 7px;
+    border-radius: 6px;
+    background: ${({ theme }) => theme.backgroundLight};
+  }
+
+  .track {
+    height: 7px;
+    border-radius: 6px;
+    background: ${({ theme }) => theme.brand};
+  }
+
+  .thumb {
+    height: 1rem;
+    width: 1rem;
+    border-radius: 0.5rem;
+    background: ${({ theme }) => theme.brand};
+    box-shadow: none;
+    color: transparent;
+  }
+
+  .thumb:hover,
+  .thumb.active {
+    box-shadow: none;
+  }
+
+  .valueLabel {
+    margin-top: 0.5rem;
+    font-weight: bold;
+    font-family: "Palanquin", sans-serif;
+    font-size: 14px;
+    padding: 0.2rem;
+    border-radius: 6rem;
+    color: transparent;
+  }
+
+  .valueLabel > span > span {
+    color: transparent;
+  }
+
+  .valueLabel > span > span {
+    color: ${({ theme }) => theme.font};
   }
 `;
 
@@ -53,14 +98,22 @@ const RangeSlider = ({ atom, ...rest }) => {
       0
       <Slider
         value={[...localValue]}
-        onChange={(e, v) => setLocalValue([...v])}
+        onChange={(_, v) => setLocalValue([...v])}
         onChangeCommitted={(e, v) => {
           setLocalValue([...v]);
           setValue([...v]);
         }}
+        classes={{
+          thumb: "thumb",
+          track: "track",
+          rail: "rail",
+          active: "active",
+          valueLabel: "valueLabel",
+        }}
         valueLabelDisplay="auto"
         aria-labelledby="range-slider"
         getAriaValueText={valuetext}
+        valueLabelDisplay={"on"}
         {...rest}
       />
       1
@@ -75,6 +128,8 @@ const FilterDiv = styled.div`
   padding: 0.5rem;
   font-weight: bold;
   font-size: 14px;
+  margin: 3px 0;
+  border-radius: 2px;
 `;
 
 const classFilterMachine = Machine({
@@ -226,12 +281,14 @@ const classFilterMachine = Machine({
 const ClassInput = styled.input`
   width: 100%;
   background: ${({ theme }) => theme.backgroundDark};
-  border: 1px ${({ theme }) => theme.backgroundDarkBorder};
+  border: 1px solid #191c1f;
+  box-shadow: 0 8px 15px 0 rgba(0, 0, 0, 0.43);
   border-radius: 2px;
   font-size: 14px;
   line-height: 1.2rem;
   font-weight: bold;
   padding: 0.5rem;
+  margin-bottom: 0.5rem;
 
   &:focus {
     outline: none;
@@ -247,12 +304,14 @@ const Selected = styled.div`
 
 const ClassButton = styled.button`
   background: ${({ theme }) => theme.background};
-  border: 1px solid ${({ theme }) => theme.backgroundDarkBorder};
+  border: 2px solid #393C3F;
+  background-color: #2D3034;
   border-radius: 11px;
   text-align: center
   vertical-align: middle;
   margin: 0.5rem 0.25rem 0;
   padding: 0 0.5rem;
+  line-height: 20px;
   font-weight: bold;
   cursor: pointer;
   &:focus {
@@ -370,14 +429,14 @@ const ClassFilter = ({ name, atoms }) => {
 
 const ConfidenceContainer = styled.div`
   background: ${({ theme }) => theme.backgroundDark};
-  box-shadow: 0 10px 35px 0 rgba(0, 0, 0, 0.43);
-  border: 1px solid ${({ theme }) => theme.backgroundLightBorder};
+  box-shadow: 0 8px 15px 0 rgba(0, 0, 0, 0.43);
+  border: 1px solid #191c1f;
   border-radius: 2px;
   margin-top: 0.5rem;
   color: ${({ theme }) => theme.fontDark};
 `;
 
-const Filter = React.memo(({ entry, ...atoms }) => {
+const Filter = React.memo(({ style, entry, ...atoms }) => {
   const [includeNoConfidence, setIncludeNoConfidence] = useRecoilState(
     atoms.includeNoConfidence(entry.name)
   );
@@ -387,7 +446,7 @@ const Filter = React.memo(({ entry, ...atoms }) => {
   const isDefaultRange = range[0] === 0 && range[1] === 1;
 
   return (
-    <FilterDiv>
+    <FilterDiv style={style}>
       <ClassFilter name={entry.name} atoms={atoms} />
       <div style={{ display: "flex", justifyContent: "space-between" }}>
         Confidence{" "}
@@ -409,17 +468,13 @@ const Filter = React.memo(({ entry, ...atoms }) => {
           step={0.01}
         />
         <FormControlLabel
-          label={<div>Show no confidence</div>}
+          label={<div style={{ lineHeight: "20px" }}>Show no confidence</div>}
           control={
             <Checkbox
               checked={includeNoConfidence}
               onChange={() => setIncludeNoConfidence(!includeNoConfidence)}
               style={{
-                color: entry.selected
-                  ? entry.color
-                  : entry.disabled
-                  ? theme.fontDarkest
-                  : theme.fontDark,
+                color: entry.selected ? entry.color : theme.fontDark,
               }}
             />
           }

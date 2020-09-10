@@ -1,36 +1,38 @@
 import React from "react";
-import { useRecoilValue } from "recoil";
+import { useRecoilState, useRecoilValue } from "recoil";
 
 import { updateState } from "../actions/update";
 import { getSocket } from "../utils/socket";
 import connect from "../utils/connect";
 import Player51 from "./Player51";
 import Tag from "./Tags/Tag";
+import * as atoms from "../recoil/atoms";
 import * as selectors from "../recoil/selectors";
 import { getLabelText, stringify } from "../utils/labels";
 
-const Sample = ({
-  displayProps,
-  dispatch,
-  sample,
-  port,
-  setSelected,
-  selected,
-  setView,
-}) => {
+const Sample = ({ displayProps, dispatch, sample, port, setView }) => {
   const host = `http://127.0.0.1:${port}`;
   const id = sample._id.$oid;
   const src = `${host}?path=${sample.filepath}&id=${id}`;
   const socket = getSocket(port, "state");
   const { activeLabels, activeTags, activeOther } = displayProps;
   const filter = useRecoilValue(selectors.labelFilters);
-  const colorMapping = useRecoilValue(selectors.labelColorMapping);
+  const colorMap = useRecoilValue(atoms.colorMap);
+  const [selectedSamples, setSelectedSamples] = useRecoilState(
+    atoms.selectedSamples
+  );
 
   const handleClick = () => {
-    const newSelected = { ...selected };
-    const event = newSelected[id] ? "remove_selection" : "add_selection";
-    newSelected[id] = newSelected[id] ? false : true;
-    setSelected(newSelected);
+    const newSelected = new Set(selectedSamples);
+    let event;
+    if (newSelected.has(id)) {
+      newSelected.delete(id);
+      event = "remove_selection";
+    } else {
+      newSelected.add(id);
+      event = "add_selection";
+    }
+    setSelectedSamples(newSelected);
     socket.emit(event, id, (data) => {
       dispatch(updateState(data));
     });
@@ -56,7 +58,7 @@ const Sample = ({
         key={"label-" + name + "-" + value + (idx ? "-" + idx : "")}
         title={name}
         name={value}
-        color={colorMapping[name]}
+        color={colorMap[name]}
       />
     );
   };
@@ -73,7 +75,7 @@ const Sample = ({
         key={"scalar-" + name}
         title={name}
         name={stringify(sample[name])}
-        color={colorMapping[name]}
+        color={colorMap[name]}
       />
     );
   };
@@ -88,12 +90,11 @@ const Sample = ({
           width: "100%",
           position: "relative",
         }}
-        colorMapping={colorMapping}
         sample={sample}
         thumbnail={true}
         activeLabels={activeLabels}
         {...eventHandlers}
-        filter={filter}
+        filterSelector={selectors.labelFilters}
       />
       <div className="sample-info" {...eventHandlers}>
         {Object.keys(sample)
@@ -115,12 +116,12 @@ const Sample = ({
           .map(renderLabel)}
         {[...sample.tags].sort().map((t) => {
           return activeTags[t] ? (
-            <Tag key={t} name={String(t)} color={colorMapping[t]} />
+            <Tag key={t} name={String(t)} color={colorMap[t]} />
           ) : null;
         })}
         {Object.keys(sample).sort().map(renderScalar)}
       </div>
-      {selected[id] ? (
+      {selectedSamples.has(id) ? (
         <div
           style={{
             border: "2px solid rgb(255, 109, 4)",

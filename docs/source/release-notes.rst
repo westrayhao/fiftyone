@@ -2,7 +2,64 @@ FiftyOne Release Notes
 ======================
 
 .. default-role:: code
-.. include:: substitutions.rst
+
+FiftyOne 0.5.4
+--------------
+*Released September 9, 2020*
+
+App
+^^^
+- Added support for selecting/excluding samples from the current view in the
+  App by selecting them and then choosing the appropriate option from a sample
+  selection menu
+- Added autocomplete when creating new stages in the view bar
+- Updated the look-and-feel of the view bar to clarify when a stage and/or the
+  entire view bar are active, and to make the bar more visually consistent with
+  the rest of the App
+- Media viewer options are maintained while browsing between samples in
+  expanded sample view
+- Improved the look-and-feel of confidence sliders when filtering labels
+- Limited floating point numbers to three decimals when rendering them in the
+  media viewer
+- Fixed some bugs related to content overflow in the view bar
+
+Core
+^^^^
+- Added support for exporting |Classification| labels in dataset formats that
+  expect |Detections| labels
+- Added support for importing/exporting supercategories for datasets in
+  :ref:`COCO format <COCODetectionDataset-import>`
+
+FiftyOne 0.5.3
+--------------
+*Released September 1, 2020*
+
+App
+^^^
+- Added support for filtering labels in the expanded sample view
+- Added support for displaying detection attributes in the expanded sample view
+- Added an option to display confidence when viewing labels in the expanded
+  sample view
+- Updated look-and-feel of display options in the expanded sample view to match
+  the main image grid view
+- Adopting a default color palette for sample fields in the App that ensures
+  that they are visually distinct
+- Fixed a bug that prevented the App from loading empty views
+- Fixed a bug that prevented the view bar from using default values for some
+  stage parameters
+
+Core
+^^^^
+- Added support for checking that a field *does not* exist via a new boolean
+  parameter of the
+  :meth:`exists() <fiftyone.core.collections.SampleCollection.exists>`
+  view stage
+- Fixed a bug that prevented FiftyOne from starting for some Windows users
+- Fixed a bug that caused
+  :meth:`take() <fiftyone.core.collections.SampleCollection.take>` and
+  :meth:`shuffle() <fiftyone.core.collections.SampleCollection.shuffle>` view
+  stages with random seeds to be regenerated when handing off between the App
+  and Python shell
 
 FiftyOne 0.5.2
 --------------

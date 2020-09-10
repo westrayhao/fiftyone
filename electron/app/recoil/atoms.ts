@@ -1,4 +1,3 @@
-import randomColor from "randomcolor";
 import { atom, atomFamily } from "recoil";
 
 export const port = atom({
@@ -6,19 +5,24 @@ export const port = atom({
   default: parseInt(process.env.FIFTYONE_SERVER_PORT) || 5151,
 });
 
+export const colorMap = atom({
+  key: "colorMap",
+  default: {},
+});
+
 export const stateDescription = atom({
   key: "stateDescription",
   default: {},
 });
 
+export const selectedSamples = atom({
+  key: "selectedSamples",
+  default: new Set(),
+});
+
 export const stageInfo = atom({
   key: "stageInfo",
   default: undefined,
-});
-
-export const colors = atom({
-  key: "colors",
-  default: randomColor({ count: 100, luminosity: "dark" }),
 });
 
 export const sidebarVisible = atom({
@@ -86,7 +90,17 @@ export const activeOther = atom({
   default: {},
 });
 
+export const modalActiveOther = atom({
+  key: "modalActiveOther",
+  default: {},
+});
+
 export const activeTags = atom({
   key: "activeTags",
+  default: {},
+});
+
+export const modalActiveTags = atom({
+  key: "modalActiveTags",
   default: {},
 });

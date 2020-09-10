@@ -36,7 +36,7 @@ models with dependable performance.
 *"Become one with your data"*
 
 FiftyOne does more than improve your dataset; it gets you closer to your data.
-Rapidly gain insight by visualizing samples overlayed with with dynamic and
+Rapidly gain insight by visualizing samples overlayed with dynamic and
 queryable fields such as ground truth and predicted labels, dataset splits, and
 much more!
 
@@ -49,6 +49,8 @@ much more!
   FiftyOne is rapidly growing.
   `Sign up for the mailing list <https://share.hsforms.com/1zpJ60ggaQtOoVeBqIZdaaA2ykyk>`_
   so we can keep you posted on new features as they come out!
+
+.. _core-capabilities:
 
 Core Capabilities
 _________________
@@ -163,7 +165,7 @@ dataset into any aspect you need; and more.
 ----------------------------------------
 
 The FiftyOne Brain is a library of powerful machine learning-powered
-:ref:`capabilities <Core Capabilities>` that provide insights into your
+:ref:`capabilities <core-capabilities>` that provide insights into your
 datasets and recommend ways to modify your datasets that will lead to
 measurably better performance of your models.
 
