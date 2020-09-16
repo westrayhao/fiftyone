@@ -211,11 +211,12 @@ const SampleModal = ({
   const playerContainerRef = useRef();
   const [playerStyle, setPlayerStyle] = useState({ height: "100%" });
   const [showJSON, setShowJSON] = useState(false);
+  const [enableJSONFilter, setEnableJSONFilter] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
   const [activeLabels, setActiveLabels] = useRecoilState(
     atoms.modalActiveLabels
   );
-  const filters = useRecoilValue(selectors.modalLabelFilters);
+  const filter = useRecoilValue(selectors.sampleModalFilter);
   const activeTags = useRecoilValue(atoms.modalActiveTags);
   const tagNames = useRecoilValue(selectors.tagNames);
   const fieldSchema = useRecoilValue(selectors.fieldSchema);
@@ -301,7 +302,8 @@ const SampleModal = ({
     values,
     countOrExists,
     selected,
-    hideCheckbox = false
+    hideCheckbox = false,
+    filteredCountOrExists
   ) => {
     return [...values].sort().map(({ name, type }) => ({
       hideCheckbox,
@@ -314,7 +316,10 @@ const SampleModal = ({
           <Close style={{ color: colorMap[name] }} />
         )
       ) : undefined,
-      count: countOrExists[name],
+      totalCount: countOrExists[name],
+      filteredCount: filteredCountOrExists
+        ? filteredCountOrExists[name]
+        : undefined,
       selected: Boolean(selected[name]),
     }));
   };
@@ -334,23 +339,25 @@ const SampleModal = ({
     {}
   );
 
-  const labelSampleValues = labelNameGroups.labels.reduce(
-    (obj, { name, type }) => {
+  const labelSampleValuesReducer = (s) => {
+    return labelNameGroups.labels.reduce((obj, { name, type }) => {
       let value;
-      if (!sample[name]) {
+      if (!s[name]) {
         value = 0;
       } else {
         value = ["Detections", "Classifcations"].includes(type)
-          ? sample[name][type.toLowerCase()].length
+          ? s[name][type.toLowerCase()].length
           : 1;
       }
       return {
         ...obj,
         [name]: value,
       };
-    },
-    {}
-  );
+    }, {});
+  };
+
+  const labelSampleValues = labelSampleValuesReducer(sample);
+  const filteredLabelSampleValues = labelSampleValuesReducer(filter(sample));
 
   const scalarSampleValues = labelNameGroups.scalars.reduce(
     (obj, { name }) => ({
@@ -374,7 +381,11 @@ const SampleModal = ({
     <Container className={fullscreen ? "fullscreen" : ""}>
       <div className="player" ref={playerContainerRef}>
         {showJSON ? (
-          <JSONView object={sample} />
+          <JSONView
+            object={sample}
+            filterJSON={enableJSONFilter}
+            enableFilter={setEnableJSONFilter}
+          />
         ) : (
           <Player51
             key={sampleUrl} // force re-render when this changes
@@ -445,7 +456,9 @@ const SampleModal = ({
             labels={getDisplayOptions(
               labelNameGroups.labels,
               labelSampleValues,
-              activeLabels
+              activeLabels,
+              false,
+              filteredLabelSampleValues
             )}
             onSelectLabel={handleSetDisplayOption(setActiveLabels)}
             scalars={getDisplayOptions(
