@@ -31,7 +31,7 @@ interface SegmentItemIndicesCache {
 }
 
 interface SegmentLayoutCache {
-  [key: number]: any;
+  [key: number]: SegmentLayout;
 }
 
 interface Offset {
@@ -41,7 +41,8 @@ interface Offset {
 
 interface SegmentLayout {
   rows: Array<Row>;
-  top: number;
+  pushLeft: number;
+  pushRight: number;
   height: number;
 }
 
@@ -302,17 +303,31 @@ class Processor {
    *
    * @param startIndex
    */
-  getLayout(startIndex: number): SegmentLayout {
+  getLayout(
+    startIndex: number,
+    containerWidth: number,
+    pushLeft: number,
+    pushRight: number
+  ): SegmentLayout {
     let numItems = 0;
+    let height = 0;
     let index = startIndex;
     const numItemsInLayout = Processor.getNumItemsInLayout(
       this.containerWidth / this.containerHeight,
       this.baseNumCols
     );
-    const layout = { rows: [], top: null, height: null };
+    let rows: Array<Row> = [];
     while (numItems < numItemsInLayout) {
-      index = layout.rows.push(this.getItemRow(index));
+      const row = this.getItemRow(index);
+      index = rows.push(row);
+      numItems += row.items.length;
     }
+    return {
+      rows,
+      height,
+      pushLeft,
+      pushRight,
+    };
   }
 
   /**
