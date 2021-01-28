@@ -14,6 +14,7 @@ import posixpath
 import traceback
 
 from bson import ObjectId
+from graphene_tornado.tornado_graphql_handler import TornadoGraphQLHandler
 import tornado.escape
 import tornado.ioloop
 import tornado.iostream
@@ -32,6 +33,7 @@ import fiftyone.constants as foc
 from fiftyone.core.expressions import ViewField as F
 import fiftyone.core.dataset as fod
 import fiftyone.core.fields as fof
+from fiftyone.core.graphql import schema
 import fiftyone.core.labels as fol
 import fiftyone.core.media as fom
 import fiftyone.core.odm as foo
@@ -1132,6 +1134,11 @@ class Application(tornado.web.Application):
         rel_web_path = "static"
         web_path = os.path.join(server_path, rel_web_path)
         handlers = [
+            (
+                r"/graphql",
+                TornadoGraphQLHandler,
+                dict(graphiql=True, schema=schema),
+            ),
             (r"/fiftyone", FiftyOneHandler),
             (r"/polling", PollingHandler),
             (r"/feedback", FeedbackHandler),
