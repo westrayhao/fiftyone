@@ -59,6 +59,7 @@ from bson.binary import Binary
 from mongoengine.errors import InvalidQueryError
 import numpy as np
 import six
+import validators
 
 import fiftyone as fo
 import fiftyone.core.fields as fof
@@ -126,9 +127,12 @@ class NoDatasetSampleDocument(NoDatasetMixin, SampleDocument):
     def __init__(self, **kwargs):
         self._data = OrderedDict()
 
-        filepath = os.path.abspath(os.path.expanduser(kwargs["filepath"]))
-        _media_type = fomm.get_media_type(filepath)
-        kwargs["_media_type"] = _media_type
+        filepath = kwargs["filepath"]
+        if validators.url(filepath) is not True:
+            filepath = os.path.abspath(os.path.expanduser(filepath))
+            kwargs["filepath"] = filepath
+
+        kwargs["_media_type"] = fomm.get_media_type(kwargs["filepath"])
 
         for field_name in self.default_fields_ordered:
             value = kwargs.pop(field_name, None)
@@ -138,9 +142,6 @@ class NoDatasetSampleDocument(NoDatasetMixin, SampleDocument):
 
             if value is None:
                 value = self._get_default(self.default_fields[field_name])
-
-            if field_name == "filepath":
-                value = os.path.abspath(os.path.expanduser(value))
 
             self._data[field_name] = value
 

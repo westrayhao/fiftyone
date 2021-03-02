@@ -89,6 +89,7 @@ setup(
         "tornado>=5.1.1,<7",
         "xmltodict",
         "universal-analytics-python3>=1.0.1,<2",
+        "validators>=0.18.2",
         # internal packages
         "voxel51-eta>=0.3,<0.4",
         # ETA dependency - restricted to a maximum version known to provide
