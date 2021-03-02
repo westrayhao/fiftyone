@@ -829,3 +829,19 @@ export const selectedObjectIds = selector<Set<string>>({
     return new Set(Object.keys(objs));
   },
 });
+
+export const sampleUrl = selectorFamily<
+  string,
+  { filepath: string; id: string }
+>({
+  key: "sampleUrl",
+  get: ({ filepath, id }) => ({ get }) => {
+    let url: string;
+    try {
+      url = String(new URL(filepath));
+    } catch {
+      url = `${get(http)}/filepath/${encodeURI(filepath)}?id=${id}`;
+    }
+    return url;
+  },
+});

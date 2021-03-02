@@ -259,7 +259,9 @@ const Sample = ({ sample, metadata }) => {
   const http = useRecoilValue(selectors.http);
   const setModal = useSetRecoilState(atoms.modal);
   const id = sample._id;
-  const src = `${http}/filepath/${encodeURI(sample.filepath)}?id=${id}`;
+  const src = useRecoilValue(
+    selectors.sampleUrl({ filepath: sample.filepath, id: sample.id })
+  );
   const socket = useRecoilValue(selectors.socket);
   const colorByLabel = useRecoilValue(atoms.colorByLabel(false));
   const [hovering, setHovering] = useState(false);
