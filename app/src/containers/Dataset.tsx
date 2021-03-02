@@ -135,12 +135,7 @@ function Dataset() {
     <>
       {modal.visible ? (
         <ModalWrapper>
-          <SampleModal
-            sampleUrl={src}
-            onClose={handleHideModal}
-            {...modalProps}
-            ref={ref}
-          />
+          <SampleModal onClose={handleHideModal} {...modalProps} ref={ref} />
         </ModalWrapper>
       ) : null}
       <Container>

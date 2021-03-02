@@ -222,19 +222,16 @@ const Row = ({ name, value, children, ...rest }: RowProps) => (
 );
 
 type Props = {
-  sample: object;
-  sampleUrl: string;
-  colorMap: { [key: string]: string };
-  onClose: () => void;
-  onNext: () => void;
-  onPrevious: () => void;
+  onClose?: () => void;
+  onNext?: () => void;
+  onPrevious?: () => void;
 };
 
-const SampleModal = (
-  { sampleUrl, onClose, onNext, onPrevious }: Props,
-  ref
-) => {
+const SampleModal = ({ onClose, onNext, onPrevious }: Props, ref) => {
   const { sample } = useRecoilValue(atoms.modal);
+  const sampleUrl = useRecoilValue(
+    selectors.sampleUrl({ filepath: sample.filepath, id: sample.id })
+  );
   const playerContainerRef = useRef();
   const [playerStyle, setPlayerStyle] = useState({
     height: "100%",
