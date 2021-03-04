@@ -845,3 +845,13 @@ export const sampleUrl = selectorFamily<
     return url;
   },
 });
+
+export const selectedSampleIndices = selector<{ [key: string]: number }>({
+  key: "selectedSampleIndices",
+  get: ({ get }) => {
+    const samples = get(atoms.currentSamples);
+    return Object.fromEntries(
+      samples.map(({ sample }, index) => [sample._id, index])
+    );
+  },
+});

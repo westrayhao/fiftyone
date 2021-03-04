@@ -7,8 +7,8 @@ import { useRecoilValue, useSetRecoilState } from "recoil";
 import FieldsSidebar from "./FieldsSidebar";
 import JSONView from "./JSONView";
 import Player51 from "./Player51";
-import SelectObjectsMenu from "./SelectObjectsMenu";
 import { ModalFooter } from "./utils";
+import SelectLabelsMenu from "./SelectLabelsMenu";
 import * as selectors from "../recoil/selectors";
 import * as atoms from "../recoil/atoms";
 import * as labelAtoms from "./Filters/utils";
@@ -409,7 +409,7 @@ const SampleModal = ({ onClose, onNext, onPrevious }: Props, ref) => {
               <span className="push-right" />
             </h2>
             <div className="select-objects-wrapper">
-              <SelectObjectsMenu
+              <SelectLabelsMenu
                 sample={sample}
                 frameNumberRef={frameNumberRef}
               />
