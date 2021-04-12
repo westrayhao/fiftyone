@@ -10,11 +10,8 @@ import argparse
 from collections import defaultdict
 import math
 import os
-import posixpath
 import traceback
-import urllib
 
-from bson import ObjectId
 import tornado.escape
 import tornado.ioloop
 import tornado.iostream
@@ -45,8 +42,9 @@ import fiftyone.core.state as fos
 import fiftyone.core.uid as fou
 import fiftyone.core.view as fov
 
+from fiftyone.server.extended_view import get_extended_view
 from fiftyone.server.json_util import convert, FiftyOneJSONEncoder
-from fiftyone.server.util import get_file_dimensions
+import fiftyone.server.utils as fosu
 
 
 # connect to the existing DB service to initialize global port information
@@ -142,6 +140,7 @@ class ReactivateHandler(RequestHandler):
         Args:
             handle_id: a handle uuid
         """
+        StateHandler.state["active_handle"] = handle_id
         for client in StateHandler.clients:
             client.write_message({"type": "reactivate", "handle": handle_id})
 
@@ -261,7 +260,14 @@ class PollingHandler(tornado.web.RequestHandler):
                     force_update = True
                     message = {"state": StateHandler.state}
 
-            if event in {"distributions", "page", "get_video_data"}:
+            if event in {
+                "distributions",
+                "page",
+                "get_video_data",
+                "all_tags",
+                "selected_statistics",
+                "tag_modal",
+            }:
                 caller = self
             elif event in {"capture", "update"}:
                 caller = client
@@ -326,29 +332,6 @@ def _get_label_object_ids(label):
         return [obj.id for obj in label[list_field_name]]
 
     raise TypeError("Cannot serialize label type: " + str(type(label)))
-
-
-def _make_frame_labels(name, label, frame_number, prefix=""):
-    label = fol.ImageLabel.from_dict(label)
-    labels = etav.VideoFrameLabels.from_image_labels(
-        label.to_image_labels(name=prefix + name), frame_number,
-    )
-
-    for obj in labels.objects:
-        obj.frame_number = frame_number
-
-    for attr in labels.attributes():
-        container = getattr(labels, attr)
-        if isinstance(container, etal.LabelsContainer):
-            object_ids = _get_label_object_ids(label)
-            assert len(container) == len(object_ids)
-            for (obj, object_id) in zip(container, object_ids):
-                # force _id to be serialized
-                obj._id = object_id
-                attrs = obj.attributes() + ["_id"]
-                obj.attributes = lambda: attrs
-
-    return labels
 
 
 class StateHandler(tornado.websocket.WebSocketHandler):
@@ -422,7 +405,9 @@ class StateHandler(tornado.websocket.WebSocketHandler):
         current state to the new client.
         """
         StateHandler.clients.add(self)
-        self.write_message({"type": "update", "state": StateHandler.state})
+        _write_message(
+            {"type": "update", "state": StateHandler.state}, only=self
+        )
 
     def on_close(self):
         """On close, remove the client from the active clients set, and
@@ -446,15 +431,14 @@ class StateHandler(tornado.websocket.WebSocketHandler):
     @staticmethod
     async def on_capture(self, src, width):
         global _notebook_clients
-        for client in StateHandler.clients:
-            client.write_message(
-                {
-                    "type": "capture",
-                    "handle": _notebook_clients[self],
-                    "src": src,
-                    "width": width,
-                }
-            )
+        _write_message(
+            {
+                "type": "capture",
+                "handle": _notebook_clients[self],
+                "src": src,
+                "width": width,
+            }
+        )
 
     @staticmethod
     async def on_as_app(self, notebook=False, handle=None, ignore=None):
@@ -465,7 +449,6 @@ class StateHandler(tornado.websocket.WebSocketHandler):
         global _notebook_clients
         if isinstance(self, StateHandler) and notebook:
             _notebook_clients[self] = handle
-            ignore = self
 
         if not isinstance(self, StateHandler):
             return
@@ -500,6 +483,8 @@ class StateHandler(tornado.websocket.WebSocketHandler):
         """
         state = fos.StateDescription.from_dict(StateHandler.state)
         state.filters = filters
+        state.selected_labels = []
+        state.selected = []
         if state.view is not None:
             view = state.view
         else:
@@ -525,39 +510,21 @@ class StateHandler(tornado.websocket.WebSocketHandler):
         elif state.dataset is not None:
             view = state.dataset.view()
         else:
-            self.write_message(
-                {"type": "page", "page": page, "results": [], "more": False}
+            _write_message(
+                {"type": "page", "page": page, "results": [], "more": False},
+                only=self,
             )
             return
 
-        for stage in _make_filter_stages(state.dataset, state.filters):
-            if type(stage) == fosg.FilterLabels:
-                stage._hide_result = True
-
-            view = view.add_stage(stage)
-
+        view = get_extended_view(view, state.filters, count_labels_tags=True)
         view = view.skip((page - 1) * page_length)
+
         if view.media_type == fom.VIDEO:
             view = view.set_field("frames", F("frames")[0])
 
-        pipeline = view._pipeline()
-        samples = (
-            await cls.sample_collection()
-            .aggregate(pipeline)
-            .to_list(page_length + 1)
+        results, more = await _get_sample_data(
+            cls.sample_collection(), view, page_length, page
         )
-        convert(samples)
-        more = False
-        if len(samples) > page_length:
-            samples = samples[:page_length]
-            more = page + 1
-
-        results = [{"sample": s} for s in samples]
-        for r in results:
-            w, h = get_file_dimensions(r["sample"]["filepath"])
-            r["width"] = w
-            r["height"] = h
-            # default to image
 
         message = {
             "type": "page",
@@ -566,7 +533,7 @@ class StateHandler(tornado.websocket.WebSocketHandler):
             "more": more,
         }
 
-        self.write_message(message)
+        _write_message(message, only=self)
 
     @staticmethod
     async def on_update(caller, state, ignore_polling_client=None):
@@ -576,12 +543,13 @@ class StateHandler(tornado.websocket.WebSocketHandler):
         Args:
             state: a serialized :class:`fiftyone.core.state.StateDescription`
         """
-        StateHandler.state = state
+        StateHandler.state = fos.StateDescription.from_dict(state).serialize()
         active_handle = state["active_handle"]
         global _notebook_clients
         global _deactivated_clients
         _deactivated_clients.discard(active_handle)
 
+        # ignore deactivated notebook cells
         if (
             active_handle
             and caller in _notebook_clients
@@ -592,6 +560,8 @@ class StateHandler(tornado.websocket.WebSocketHandler):
         for client, events in PollingHandler.clients.items():
             if client in _notebook_clients:
                 uuid = _notebook_clients[client]
+
+                # deactivate the last active colab cell
                 if uuid != active_handle:
                     events.clear()
                     _deactivated_clients.add(uuid)
@@ -651,75 +621,194 @@ class StateHandler(tornado.websocket.WebSocketHandler):
         """
         dataset = fod.load_dataset(dataset_name)
         config = fos.StateDescription.from_dict(StateHandler.state).config
+        active_handle = StateHandler.state["active_handle"]
         StateHandler.state = fos.StateDescription(
-            dataset=dataset, config=config
+            dataset=dataset, config=config, active_handle=active_handle
         ).serialize()
         await self.on_update(self, StateHandler.state)
 
     @staticmethod
-    async def on_get_video_data(self, _id, filepath):
+    async def on_get_video_data(self, _id):
         """Gets the frame labels for video samples.
 
         Args:
             _id: a sample _id
-            filepath: the absolute path to the sample's video on disk
         """
         state = fos.StateDescription.from_dict(StateHandler.state)
-        view = state.view or state.dataset
-        view = view.select(_id)
-        pipeline = view._pipeline()
-        sample = (
-            await self.sample_collection().aggregate(pipeline).to_list(1)
-        )[0]
+        if state.view is not None:
+            view = state.view
+        else:
+            view = state.dataset
 
-        frames = sample["frames"]
-        convert(frames)
-
-        labels = etav.VideoLabels()
-        for frame_dict in frames:
-            frame_number = frame_dict["frame_number"]
-            frame_labels = etav.VideoFrameLabels(frame_number=frame_number)
-            for k, v in frame_dict.items():
-                if isinstance(v, dict) and "_cls" in v:
-                    field_labels = _make_frame_labels(
-                        k, v, frame_number, prefix=view._FRAMES_PREFIX
-                    )
-                    frame_labels.merge_labels(field_labels)
-
-            labels.add_frame(frame_labels)
-
-        sample_schema = state.dataset.get_field_schema()
-        for frame_number in range(
-            1, etav.get_frame_count(sample["filepath"]) + 1
-        ):
-            frame_labels = etav.VideoFrameLabels(frame_number=frame_number)
-            for k, v in sample.items():
-                if k not in sample_schema:
-                    continue
-
-                field = sample_schema[k]
-                if not isinstance(field, fof.EmbeddedDocumentField):
-                    continue
-
-                if not issubclass(field.document_type, fol.Label):
-                    continue
-
-                field_labels = _make_frame_labels(k, v, frame_number)
-                for obj in field_labels.objects:
-                    obj.frame_number = frame_number
-
-                frame_labels.merge_labels(field_labels)
-
-            labels.add_frame(frame_labels, overwrite=False)
+        result = await _get_video_data(
+            self.sample_collection(), state, view, [_id]
+        )
+        sample, frames, labels = result[0]
 
         fps = etav.get_frame_rate(sample["filepath"])
-        self.write_message(
+        _write_message(
             {
                 "type": "video_data-%s" % _id,
                 "frames": frames,
                 "labels": labels.serialize(),
                 "fps": fps,
-            }
+            },
+            only=self,
+        )
+
+    @staticmethod
+    async def on_tag(
+        caller, changes, target_labels=False, active_labels=None,
+    ):
+        state = fos.StateDescription.from_dict(StateHandler.state)
+        if state.view is not None:
+            view = state.view
+        else:
+            view = state.dataset
+
+        view = get_extended_view(view, state.filters)
+        if state.selected:
+            view = view.select(state.selected)
+
+        if target_labels:
+            fosu.change_label_tags(view, changes, label_fields=active_labels)
+        else:
+            fosu.change_sample_tags(view, changes)
+
+        StateHandler.state["refresh"] = not state.refresh
+        for clients in PollingHandler.clients.values():
+            clients.update({"update"})
+
+        await StateHandler.on_update(caller, StateHandler.state)
+
+    @staticmethod
+    async def on_all_tags(caller):
+        state = fos.StateDescription.from_dict(StateHandler.state)
+        dataset = state.dataset
+
+        if dataset is None:
+            label = []
+            sample = []
+        else:
+            (_, tag_aggs,) = fos.DatasetStatistics.get_label_aggregations(
+                dataset
+            )
+            results = await dataset._async_aggregate(
+                StateHandler.sample_collection(),
+                [foa.Distinct("tags")] + tag_aggs,
+            )
+            sample = results[0]
+
+            label = set()
+            for result in results[1:]:
+                label |= set(result.keys())
+
+        _write_message(
+            {"type": "all_tags", "sample": sample, "label": label}, only=caller
+        )
+
+    @staticmethod
+    async def on_save_filters(caller):
+        state = fos.StateDescription.from_dict(StateHandler.state)
+        if state.view is not None:
+            view = state.view
+        else:
+            view = state.dataset
+
+        state.view = get_extended_view(view, state.filters)
+        state.filters = {}
+
+        await StateHandler.on_update(caller, state.serialize())
+
+    @staticmethod
+    async def on_tag_modal(
+        caller, changes, sample_id=None, labels=None,
+    ):
+        state = fos.StateDescription.from_dict(StateHandler.state)
+        if state.view is not None:
+            view = state.view
+        else:
+            view = state.dataset
+
+        if sample_id:
+            sample_ids = [sample_id]
+            tag_view = view.select(sample_id)
+            fosu.change_sample_tags(tag_view, changes)
+        else:
+            if state.selected_labels:
+                labels = state.selected_labels
+
+            sample_ids = list({label["sample_id"] for label in labels})
+            tag_view = view.select_labels(labels=labels)
+
+            fields = {label["field"] for label in labels}
+            fosu.change_label_tags(tag_view, changes, label_fields=fields)
+
+        for clients in PollingHandler.clients.values():
+            clients.update({"extended_statistics", "statistics"})
+
+        if isinstance(caller, PollingHandler):
+            await StateHandler.send_samples(sample_ids, only=caller)
+
+        awaitables = [StateHandler.send_samples(sample_ids)]
+        awaitables += StateHandler.get_statistics_awaitables()
+
+        asyncio.gather(*awaitables)
+
+    @staticmethod
+    async def on_selected_statistics(caller, active_labels=[]):
+        state = fos.StateDescription.from_dict(StateHandler.state)
+        if state.view is not None:
+            view = state.view
+        else:
+            view = state.dataset
+
+        view = get_extended_view(view, state.filters)
+        view = view.select(state.selected).select_fields(active_labels)
+
+        (count_aggs, tag_aggs,) = fos.DatasetStatistics.get_label_aggregations(
+            view
+        )
+        results = await view._async_aggregate(
+            StateHandler.sample_collection(), count_aggs + tag_aggs
+        )
+
+        count = sum(results[: len(count_aggs)])
+
+        tags = defaultdict(int)
+        for result in results[len(count_aggs) :]:
+            for tag, num in result.items():
+                tags[tag] += num
+
+        _write_message(
+            {"type": "selected_statistics", "count": count, "tags": tags},
+            only=caller,
+        )
+
+    @classmethod
+    async def send_samples(cls, sample_ids, only=None):
+        state = fos.StateDescription.from_dict(StateHandler.state)
+        if state.view is not None:
+            view = state.view
+        else:
+            view = state.dataset
+
+        view = get_extended_view(view, state.filters, count_labels_tags=True)
+
+        col = cls.sample_collection()
+
+        if view.media_type == fom.VIDEO:
+            samples = await _get_video_data(col, state, view, sample_ids)
+            result = [
+                {"sample": s, "frames": f, "labels": l.serialize()}
+                for (s, f, l) in samples
+            ]
+        else:
+            view = view.select(sample_ids)
+            result, _ = await _get_sample_data(col, view, len(sample_ids), 1)
+
+        _write_message(
+            {"type": "samples_update", "samples": result}, app=True, only=only
         )
 
     @classmethod
@@ -758,26 +847,11 @@ class StateHandler(tornado.websocket.WebSocketHandler):
             ignore (None): a client to not send the update to
             only (None): a client to restrict the updates to
         """
-        response = {"type": "update", "state": StateHandler.state}
-        if only:
-            only.write_message(response)
-            return
-
-        global _notebook_clients
-        global _deactivated_clients
-        active_handle = StateHandler.state["active_handle"]
-        for client in cls.clients:
-            if client in _notebook_clients:
-                uuid = _notebook_clients[client]
-                if uuid != active_handle and uuid not in _deactivated_clients:
-                    _deactivated_clients.add(uuid)
-                    client.write_message({"type": "deactivate"})
-                    continue
-
-            if client == ignore:
-                continue
-
-            client.write_message(response)
+        _write_message(
+            {"type": "update", "state": StateHandler.state},
+            ignore=ignore,
+            only=only,
+        )
 
     @classmethod
     async def send_statistics(cls, view, filters=None, only=None):
@@ -793,31 +867,29 @@ class StateHandler(tornado.websocket.WebSocketHandler):
         base_view = view
         data = {"main": [], "none": []}
         if view is not None and (filters is None or len(filters)):
-            if filters is not None and len(filters):
-                for stage in _make_filter_stages(view._dataset, filters):
-                    view = view.add_stage(stage)
+            view = get_extended_view(view, filters)
 
             stats = fos.DatasetStatistics(view)
             aggs = stats.aggregations
+            exists_aggs = stats.exists_aggregations
+            num_aggs = len(aggs)
+
             results = await view._async_aggregate(
-                cls.sample_collection(), aggs
+                cls.sample_collection(), aggs + exists_aggs
             )
-            start_none_idx = len(aggs) - stats._none_len
-            none_aggs = aggs[start_none_idx:]
-            none_results = results[start_none_idx:]
-            aggs = aggs[:start_none_idx]
-            results = results[:start_none_idx]
+            aggs_results = results[:num_aggs]
+            exists_results = results[num_aggs:]
 
             for a, r, k in [
-                (aggs, results, "main"),
-                (none_aggs, none_results, "none"),
+                (aggs, aggs_results, "main"),
+                (exists_aggs, exists_results, "none"),
             ]:
                 for agg, result in zip(a, r):
                     data[k].append(
                         {
-                            "result": result,
                             "_CLS": agg.__class__.__name__,
                             "name": agg.field_name,
+                            "result": result,
                         }
                     )
 
@@ -834,19 +906,7 @@ class StateHandler(tornado.websocket.WebSocketHandler):
             "filters": filters,
         }
 
-        if only:
-            only.write_message(message)
-        else:
-            global _notebook_clients
-            active_handle = StateHandler.state["active_handle"]
-            for client in StateHandler.app_clients:
-                if (
-                    active_handle
-                    and _notebook_clients.get(client, None) != active_handle
-                ):
-                    continue
-
-                client.write_message(message)
+        _write_message(message, app=True, only=only)
 
     @classmethod
     async def on_distributions(cls, self, group):
@@ -867,8 +927,7 @@ class StateHandler(tornado.websocket.WebSocketHandler):
         else:
             results = []
 
-        for stage in _make_filter_stages(state.dataset, state.filters):
-            view = view.add_stage(stage)
+        view = get_extended_view(view, state.filters)
 
         if group == "labels" and results is None:
 
@@ -922,7 +981,53 @@ class StateHandler(tornado.websocket.WebSocketHandler):
             results = await _gather_results(col, aggs, fields, view, ticks)
 
         results = sorted(results, key=lambda i: i["name"])
-        self.write_message({"type": "distributions", "results": results})
+        _write_message(
+            {"type": "distributions", "results": results}, only=self
+        )
+
+
+def _write_message(message, app=False, session=False, ignore=None, only=None):
+    clients = StateHandler.app_clients if app else StateHandler.clients
+    clients = _filter_deactivated_clients(clients)
+
+    print(only)
+    if only:
+        only.write_message(message)
+        return
+
+    for client in clients:
+        if session and client in StateHandler.app_clients:
+            continue
+
+        if client == ignore:
+            continue
+
+        client.write_message(message)
+
+
+def _filter_deactivated_clients(clients):
+    global _notebook_clients
+    global _deactivated_clients
+    active_handle = StateHandler.state["active_handle"]
+
+    filtered = []
+
+    for client in clients:
+        if client in _notebook_clients:
+            uuid = _notebook_clients[client]
+            if uuid != active_handle and uuid not in _deactivated_clients:
+                _deactivated_clients.add(uuid)
+                client.write_message({"type": "deactivate"})
+
+            if uuid != active_handle:
+                continue
+
+        filtered.append(client)
+
+    return filtered
+
+
+_DEFAULT_NUM_HISTOGRAM_BINS = 25
 
 
 def _parse_histogram_values(result, field):
@@ -979,7 +1084,6 @@ async def _gather_results(col, aggs, fields, view, ticks=None):
             cls = field.document_type
         except:
             type_ = field.__class__.__name__
-            is_label = False
             cls = None
 
         name = agg.field_name
@@ -1017,7 +1121,7 @@ def _count_values(f, view):
         schemas.append((view.get_frame_field_schema(), view._FRAMES_PREFIX))
 
     for schema, prefix in schemas:
-        for name, field in schema.items():
+        for field in schema.values():
             path = f(field)
             if path is None:
                 continue
@@ -1028,12 +1132,8 @@ def _count_values(f, view):
     return aggregations, fields
 
 
-def _numeric_bounds(fields, paths):
-    aggregations = []
-    for field, path in zip(fields, paths):
-        aggregations.append(foa.Bounds(path))
-
-    return aggregations
+def _numeric_bounds(paths):
+    return [foa.Bounds(path) for path in paths]
 
 
 async def _numeric_histograms(coll, view, schema, prefix=""):
@@ -1048,7 +1148,7 @@ async def _numeric_histograms(coll, view, schema, prefix=""):
             paths.append("%s%s" % (prefix, name))
             fields.append(field)
 
-    aggs = _numeric_bounds(fields, paths)
+    aggs = _numeric_bounds(paths)
     bounds = await view._async_aggregate(coll, aggs)
     aggregations = []
     ticks = []
@@ -1075,97 +1175,106 @@ async def _numeric_histograms(coll, view, schema, prefix=""):
     return aggregations, fields, ticks
 
 
-_BOOL_FILTER = "bool"
-_NUMERIC_FILTER = "numeric"
-_STR_FILTER = "str"
+async def _get_sample_data(col, view, page_length, page):
+    pipeline = view._pipeline()
+
+    samples = await foo.aggregate(col, pipeline).to_list(page_length + 1)
+    convert(samples)
+    more = False
+    if len(samples) > page_length:
+        samples = samples[:page_length]
+        more = page + 1
+
+    results = [{"sample": s} for s in samples]
+    for r in results:
+        w, h = fosu.get_file_dimensions(r["sample"]["filepath"])
+        r["width"] = w
+        r["height"] = h
+
+    return results, more
 
 
-def _make_scalar_expression(f, args):
-    expr = None
-    cls = args["_CLS"]
-    if cls == _BOOL_FILTER:
-        true, false = args["true"], args["false"]
-        if true and false:
-            expr = f.is_in([True, False])
-
-        if not true and false:
-            expr = f == False
-
-        if true and not false:
-            expr = f == True
-
-        if not true and not false:
-            expr = (f != True) & (f != False)
-
-    elif cls == _NUMERIC_FILTER:
-        mn, mx = args["range"]
-        expr = (f >= mn) & (f <= mx)
-    elif cls == _STR_FILTER:
-        values = args["values"]
-        if not values:
-            return None
-
-        none = any(map(lambda v: v is None, values))
-        values = filter(lambda v: v is not None, values)
-        expr = f.is_in(values)
-        exclude = args["exclude"]
-
-        if exclude:
-            # pylint: disable=invalid-unary-operand-type
-            expr = ~expr
-
-        if none:
-            if exclude:
-                expr &= f.exists()
-            else:
-                expr |= ~(f.exists())
-
-        return expr
-
-    none = args["none"]
-    if not none:
-        if expr is not None:
-            expr &= f.exists()
+async def _get_video_data(col, state, view, _ids):
+    view = view.select(_ids)
+    pipeline = view._pipeline()
+    results = []
+    async for sample in col.aggregate(pipeline):
+        frames = sample["frames"]
+        if frames:
+            sample["frames"] = frames[0]
         else:
-            expr = f.exists()
-    elif expr is not None:
-        expr |= ~(f.exists())
+            sample["frames"] = None
 
-    return expr
+        convert([sample])
+        convert(frames)
 
+        labels = _make_video_labels(state, view, sample, frames)
+        results.append((sample, frames, labels))
 
-def _make_filter_stages(dataset, filters):
-    field_schema = dataset.get_field_schema()
-    if dataset.media_type == fom.VIDEO:
-        frame_field_schema = dataset.get_frame_field_schema()
-    else:
-        frame_field_schema = None
-
-    stages = []
-    for path, args in filters.items():
-        keys = path.split(".")
-        if path.startswith(dataset._FRAMES_PREFIX):
-            schema = frame_field_schema
-            field = schema[keys[1]]
-            path = ".".join(keys[:2])
-        else:
-            schema = field_schema
-            path = keys[0]
-            field = schema[path]
-
-        if isinstance(field, fof.EmbeddedDocumentField):
-            expr = _make_scalar_expression(F(keys[-1]), args)
-            if expr is not None:
-                stages.append(fosg.FilterLabels(path, expr))
-        else:
-            expr = _make_scalar_expression(F(path), args)
-            if expr is not None:
-                stages.append(fosg.Match(expr))
-
-    return stages
+    return results
 
 
-_DEFAULT_NUM_HISTOGRAM_BINS = 25
+def _make_frame_labels(name, label, frame_number, prefix=""):
+    label = fol.ImageLabel.from_dict(label)
+    labels = etav.VideoFrameLabels.from_image_labels(
+        label.to_image_labels(name=prefix + name), frame_number,
+    )
+
+    for obj in labels.objects:
+        obj.frame_number = frame_number
+
+    for attr in labels.attributes():
+        container = getattr(labels, attr)
+
+        if isinstance(container, etal.LabelsContainer):
+            object_ids = _get_label_object_ids(label)
+            assert len(container) == len(object_ids)
+            for (obj, object_id) in zip(container, object_ids):
+                # force _id to be serialized
+                obj._id = object_id
+                attrs = obj.attributes() + ["_id"]
+                obj.attributes = lambda: attrs
+
+    return labels
+
+
+def _make_video_labels(state, view, sample, frames):
+    labels = etav.VideoLabels()
+    for frame_dict in frames:
+        frame_number = frame_dict["frame_number"]
+        frame_labels = etav.VideoFrameLabels(frame_number=frame_number)
+        for k, v in frame_dict.items():
+            if isinstance(v, dict) and "_cls" in v:
+                field_labels = _make_frame_labels(
+                    k, v, frame_number, prefix=view._FRAMES_PREFIX
+                )
+                frame_labels.merge_labels(field_labels)
+
+        labels.add_frame(frame_labels)
+
+    sample_schema = state.dataset.get_field_schema()
+    for frame_number in range(1, etav.get_frame_count(sample["filepath"]) + 1):
+        frame_labels = etav.VideoFrameLabels(frame_number=frame_number)
+        for k, v in sample.items():
+            if k not in sample_schema:
+                continue
+
+            field = sample_schema[k]
+            if not isinstance(field, fof.EmbeddedDocumentField):
+                continue
+
+            if not issubclass(field.document_type, fol.Label):
+                continue
+
+            field_labels = _make_frame_labels(k, v, frame_number)
+            for obj in field_labels.objects:
+                obj.frame_number = frame_number
+
+            frame_labels.merge_labels(field_labels)
+
+        labels.add_frame(frame_labels, overwrite=False)
+
+    return labels
 
 
 class FileHandler(tornado.web.StaticFileHandler):

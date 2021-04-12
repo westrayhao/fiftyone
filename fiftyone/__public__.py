@@ -40,25 +40,32 @@ from .core.dataset import (
 from .core.expressions import (
     ViewField,
     ViewExpression,
+    VALUE,
 )
 from .core.fields import (
-    Field,
+    ArrayField,
     BooleanField,
-    IntField,
-    FrameNumberField,
-    FloatField,
-    StringField,
-    ListField,
-    KeypointsField,
-    PolylinePointsField,
+    ClassesField,
     DictField,
-    IntDictField,
-    TargetsField,
-    MultiTargetsField,
     EmbeddedDocumentField,
     EmbeddedDocumentListField,
+    Field,
+    FrameNumberField,
+    FloatField,
+    GeoPointField,
+    GeoLineStringField,
+    GeoPolygonField,
+    GeoMultiPointField,
+    GeoMultiLineStringField,
+    GeoMultiPolygonField,
+    IntField,
+    IntDictField,
+    KeypointsField,
+    ListField,
+    PolylinePointsField,
+    StringField,
+    TargetsField,
     VectorField,
-    ArrayField,
 )
 from .core.frame import Frame
 from .core.labels import (
@@ -78,6 +85,8 @@ from .core.labels import (
     Keypoint,
     Keypoints,
     Segmentation,
+    GeoLocation,
+    GeoLocations,
 )
 from .core.metadata import (
     Metadata,
@@ -96,6 +105,21 @@ from .core.models import (
     ModelManagerConfig,
     ModelManager,
 )
+from .core.plots import (
+    plot_confusion_matrix,
+    plot_pr_curve,
+    plot_pr_curves,
+    plot_roc_curve,
+    location_scatterplot,
+    scatterplot,
+    Plot,
+    ResponsivePlot,
+    InteractivePlot,
+    ViewPlot,
+    ViewGrid,
+    CategoricalHistogram,
+    NumericalHistogram,
+)
 from .core.sample import Sample
 from .core.stages import (
     Exclude,
@@ -110,6 +134,8 @@ from .core.stages import (
     FilterKeypoints,
     Limit,
     LimitLabels,
+    GeoNear,
+    GeoWithin,
     MapLabels,
     Match,
     MatchTags,

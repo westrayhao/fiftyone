@@ -16,6 +16,7 @@ import eta.core.utils as etau
 import fiftyone.core.aggregations as foa
 import fiftyone.core.collections as foc
 import fiftyone.core.media as fom
+import fiftyone.core.odm as foo
 import fiftyone.core.sample as fos
 import fiftyone.core.stages as fost
 
@@ -49,9 +50,25 @@ class DatasetView(foc.SampleCollection):
         dataset: a :class:`fiftyone.core.dataset.Dataset`
     """
 
-    def __init__(self, dataset):
+    def __init__(self, dataset, _stages=None):
+        if _stages is None:
+            _stages = []
+
         self.__dataset__ = dataset
-        self._stages = []
+        self._stages = _stages
+
+    def __eq__(self, other_view):
+        if not isinstance(other_view, DatasetView):
+            return False
+
+        if self._dataset != other_view._dataset:
+            return False
+
+        # Two views into the same dataset are equal if their stage definitions
+        # are equal, excluding their UUIDs
+        d = self._serialize(include_uuids=False)
+        other_d = other_view._serialize(include_uuids=False)
+        return d == other_d
 
     def __len__(self):
         return self.count()
@@ -84,9 +101,8 @@ class DatasetView(foc.SampleCollection):
             )
 
     def __copy__(self):
-        view = self.__class__(self._dataset)
-        view._stages = deepcopy(self._stages)
-        return view
+        _stages = deepcopy(self._stages)
+        return self.__class__(self._dataset, _stages=_stages)
 
     @property
     def _dataset(self):
@@ -120,17 +136,29 @@ class DatasetView(foc.SampleCollection):
         self._dataset.info = info
 
     @property
-    def default_mask_targets(self):
-        """The default mask targets of the underlying dataset.
+    def classes(self):
+        """The classes of the underlying dataset.
 
-        See :meth:`fiftyone.core.dataset.Dataset.default_mask_targets` for more
+        See :meth:`fiftyone.core.dataset.Dataset.classes` for more information.
+        """
+        return self._dataset.classes
+
+    @classes.setter
+    def classes(self, classes):
+        self._dataset.classes = classes
+
+    @property
+    def default_classes(self):
+        """The default classes of the underlying dataset.
+
+        See :meth:`fiftyone.core.dataset.Dataset.default_classes` for more
         information.
         """
-        return self._dataset.default_mask_targets
+        return self._dataset.default_classes
 
-    @default_mask_targets.setter
-    def default_mask_targets(self, targets):
-        self._dataset.default_mask_targets = targets
+    @default_classes.setter
+    def default_classes(self, classes):
+        self._dataset.default_classes = classes
 
     @property
     def mask_targets(self):
@@ -144,6 +172,19 @@ class DatasetView(foc.SampleCollection):
     @mask_targets.setter
     def mask_targets(self, targets):
         self._dataset.mask_targets = targets
+
+    @property
+    def default_mask_targets(self):
+        """The default mask targets of the underlying dataset.
+
+        See :meth:`fiftyone.core.dataset.Dataset.default_mask_targets` for more
+        information.
+        """
+        return self._dataset.default_mask_targets
+
+    @default_mask_targets.setter
+    def default_mask_targets(self, targets):
+        self._dataset.default_mask_targets = targets
 
     @property
     def stages(self):
@@ -189,7 +230,10 @@ class DatasetView(foc.SampleCollection):
             return "    ---"
 
         return "    " + "\n    ".join(
-            ["%d. %s" % (idx, str(d)) for idx, d in enumerate(self._stages, 1)]
+            [
+                "%d. %s" % (idx, str(stage))
+                for idx, stage in enumerate(self._stages, 1)
+            ]
         )
 
     def view(self):
@@ -241,7 +285,7 @@ class DatasetView(foc.SampleCollection):
                 which to restrict the returned schema. Must be a subclass of
                 :class:`fiftyone.core.odm.BaseEmbeddedDocument`
             include_private (False): whether to include fields that start with
-                `_` in the returned schema
+                ``_`` in the returned schema
 
         Returns:
              an ``OrderedDict`` mapping field names to field types
@@ -270,7 +314,7 @@ class DatasetView(foc.SampleCollection):
                 which to restrict the returned schema. Must be a subclass of
                 :class:`fiftyone.core.odm.BaseEmbeddedDocument`
             include_private (False): whether to include fields that start with
-                `_` in the returned schema
+                ``_`` in the returned schema
 
         Returns:
             a dictionary mapping field names to field types, or ``None`` if
@@ -542,15 +586,19 @@ class DatasetView(foc.SampleCollection):
         """
         return self._dataset._clone(name=name, view=self)
 
-    def list_indexes(self):
+    def list_indexes(self, include_private=False):
         """Returns the fields of the dataset that are indexed.
+
+        Args:
+            include_private (False): whether to include private fields that
+                start with ``_``
 
         Returns:
             a list of field names
         """
-        return self._dataset.list_indexes()
+        return self._dataset.list_indexes(include_private=include_private)
 
-    def create_index(self, field_name, unique=False):
+    def create_index(self, field_name, unique=False, sphere2d=False):
         """Creates an index on the given field.
 
         If the given field already has a unique index, it will be retained
@@ -564,8 +612,12 @@ class DatasetView(foc.SampleCollection):
         Args:
             field_name: the field name or ``embedded.field.name``
             unique (False): whether to add a uniqueness constraint to the index
+            sphere2d (False): whether the field is a GeoJSON field that
+                requires a sphere2d index
         """
-        self._dataset.create_index(field_name, unique=unique)
+        self._dataset.create_index(
+            field_name, unique=unique, sphere2d=sphere2d
+        )
 
     def drop_index(self, field_name):
         """Drops the index on the given field.
@@ -609,8 +661,8 @@ class DatasetView(foc.SampleCollection):
         return d
 
     def _needs_frames(self):
-        for s in self._stages:
-            if s._needs_frames(self):
+        for stage in self._stages:
+            if stage._needs_frames(self):
                 return True
 
         return False
@@ -622,18 +674,17 @@ class DatasetView(foc.SampleCollection):
         detach_frames=False,
         frames_only=False,
     ):
+        _view = self._dataset.view()
         _pipeline = []
-        for s in self._stages:
-            _pipeline.extend(s.to_mongo(self))
+        for stage in self._stages:
+            _view = _view.add_stage(stage)
+            _pipeline.extend(stage.to_mongo(_view))
 
         if pipeline is not None:
             _pipeline.extend(pipeline)
 
         if not attach_frames:
             attach_frames = self._needs_frames()
-
-        if not attach_frames:
-            detach_frames = False
 
         return self._dataset._pipeline(
             pipeline=_pipeline,
@@ -643,21 +694,29 @@ class DatasetView(foc.SampleCollection):
         )
 
     def _aggregate(
-        self, pipeline=None, attach_frames=True, detach_frames=False
+        self,
+        pipeline=None,
+        attach_frames=True,
+        detach_frames=False,
+        frames_only=False,
     ):
         _pipeline = self._pipeline(
             pipeline=pipeline,
             attach_frames=attach_frames,
             detach_frames=detach_frames,
+            frames_only=frames_only,
         )
-        return self._dataset._sample_collection.aggregate(_pipeline)
+        return foo.aggregate(self._dataset._sample_collection, _pipeline)
 
     @property
     def _doc(self):
         return self._dataset._doc
 
-    def _serialize(self):
-        return [s._serialize() for s in self._stages]
+    def _serialize(self, include_uuids=True):
+        return [
+            stage._serialize(include_uuid=include_uuids)
+            for stage in self._stages
+        ]
 
     @staticmethod
     def _build(dataset, stage_dicts):
@@ -735,14 +794,14 @@ class DatasetView(foc.SampleCollection):
         excluded_fields = set()
 
         for stage in self._stages:
-            _selected_fields = stage.get_selected_fields(frames=frames)
+            _selected_fields = stage.get_selected_fields(self, frames=frames)
             if _selected_fields:
                 if selected_fields is None:
                     selected_fields = set(_selected_fields)
                 else:
                     selected_fields.intersection_update(_selected_fields)
 
-            _excluded_fields = stage.get_excluded_fields(frames=frames)
+            _excluded_fields = stage.get_excluded_fields(self, frames=frames)
             if _excluded_fields:
                 excluded_fields.update(_excluded_fields)
 

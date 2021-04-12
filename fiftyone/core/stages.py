@@ -19,14 +19,16 @@ import eta.core.utils as etau
 
 import fiftyone.core.expressions as foe
 from fiftyone.core.expressions import ViewField as F
+from fiftyone.core.expressions import VALUE
 import fiftyone.core.fields as fof
+import fiftyone.core.frame as fofr
 import fiftyone.core.labels as fol
 import fiftyone.core.media as fom
-import fiftyone.core.sample as fos
 from fiftyone.core.odm.document import MongoEngineBaseDocument
-from fiftyone.core.odm.frame import DatasetFrameSampleDocument
-from fiftyone.core.odm.mixins import default_sample_fields
-from fiftyone.core.odm.sample import DatasetSampleDocument
+import fiftyone.core.sample as fos
+import fiftyone.core.utils as fou
+
+foug = fou.lazy_import("fiftyone.utils.geojson")
 
 
 class ViewStage(object):
@@ -67,11 +69,17 @@ class ViewStage(object):
         """
         return None
 
-    def get_selected_fields(self, frames=False):
+    def get_selected_fields(self, sample_collection, frames=False):
         """Returns a list of fields that have been selected by the stage, if
         any.
 
+        View stages only need to report selected fields if they insist that
+        non-selected fields not appear in the schema of the returned view.
+
         Args:
+            sample_collection: the
+                :class:`fiftyone.core.collections.SampleCollection` to which
+                the stage is being applied
             frames (False): whether to return sample-level (False) or
                 frame-level (True) fields
 
@@ -80,11 +88,17 @@ class ViewStage(object):
         """
         return None
 
-    def get_excluded_fields(self, frames=False):
+    def get_excluded_fields(self, sample_collection, frames=False):
         """Returns a list of fields that have been excluded by the stage, if
         any.
 
+        View stages only need to report excluded fields if they insist that
+        excluded fields not appear in the schema of the returned view.
+
         Args:
+            sample_collection: the
+                :class:`fiftyone.core.collections.SampleCollection` to which
+                the stage is being applied
             frames (False): whether to return sample-level (False) or
                 frame-level (True) fields
 
@@ -133,20 +147,28 @@ class ViewStage(object):
         """
         return False
 
-    def _serialize(self):
+    def _serialize(self, include_uuid=True):
         """Returns a JSON dict representation of the :class:`ViewStage`.
+
+        Args:
+            include_uuid (True): whether to include the stage's UUID in the JSON
+                representation
 
         Returns:
             a JSON dict
         """
-        if self._uuid is None:
-            self._uuid = str(uuid.uuid4())
-
-        return {
+        d = {
             "_cls": etau.get_class_name(self),
-            "_uuid": self._uuid,
             "kwargs": self._kwargs(),
         }
+
+        if include_uuid:
+            if self._uuid is None:
+                self._uuid = str(uuid.uuid4())
+
+            d["_uuid"] = self._uuid
+
+        return d
 
     def _kwargs(self):
         """Returns a list of ``[name, value]`` lists describing the parameters
@@ -246,8 +268,8 @@ class Exclude(ViewStage):
         """The list of sample IDs to exclude."""
         return self._sample_ids
 
-    def to_mongo(self, _, **__):
-        sample_ids = [ObjectId(id) for id in self._sample_ids]
+    def to_mongo(self, _):
+        sample_ids = [ObjectId(_id) for _id in self._sample_ids]
         return [{"$match": {"_id": {"$not": {"$in": sample_ids}}}}]
 
     def _kwargs(self):
@@ -265,8 +287,8 @@ class Exclude(ViewStage):
 
     def _validate_params(self):
         # Ensures that ObjectIDs are valid
-        for id in self._sample_ids:
-            ObjectId(id)
+        for _id in self._sample_ids:
+            ObjectId(_id)
 
 
 class ExcludeFields(ViewStage):
@@ -314,39 +336,41 @@ class ExcludeFields(ViewStage):
     def __init__(self, field_names):
         if etau.is_str(field_names):
             field_names = [field_names]
-        else:
+        elif field_names is not None:
             field_names = list(field_names)
 
         self._field_names = field_names
-        self._dataset = None
 
     @property
     def field_names(self):
         """The list of field names to exclude."""
         return self._field_names
 
-    def get_excluded_fields(self, frames=False):
+    def get_excluded_fields(self, sample_collection, frames=False):
         if frames:
-            default_fields = default_sample_fields(
-                DatasetFrameSampleDocument, include_private=True
+            default_fields = fofr.get_default_frame_fields(
+                include_private=True, include_id=True
             )
-            excluded_fields = [
-                f[len(self._dataset._FRAMES_PREFIX) :]
-                for f in self.field_names
-                if f.startswith(self._dataset._FRAMES_PREFIX)
-            ]
+
+            excluded_fields = []
+            for field in self.field_names:
+                (
+                    field_name,
+                    is_frame_field,
+                ) = sample_collection._handle_frame_field(field)
+                if is_frame_field:
+                    excluded_fields.append(field_name)
         else:
-            default_fields = default_sample_fields(
-                DatasetSampleDocument, include_private=True
+            default_fields = fos.get_default_sample_fields(
+                include_private=True, include_id=True
             )
-            if not frames and (self._dataset.media_type == fom.VIDEO):
+            if sample_collection.media_type == fom.VIDEO:
                 default_fields += ("frames",)
 
-            excluded_fields = [
-                f
-                for f in self.field_names
-                if not f.startswith(self._dataset._FRAMES_PREFIX)
-            ]
+            excluded_fields = []
+            for field in self.field_names:
+                if not sample_collection._is_frame_field(field):
+                    excluded_fields.append(field)
 
         for field_name in excluded_fields:
             if field_name.startswith("_"):
@@ -354,21 +378,39 @@ class ExcludeFields(ViewStage):
                     "Cannot exclude private field '%s'" % field_name
                 )
 
-            if field_name in default_fields:
+            if field_name == "id" or field_name in default_fields:
+                ftype = "frame field" if frames else "field"
                 raise ValueError(
-                    "Cannot exclude default field '%s'" % field_name
+                    "Cannot exclude default %s '%s'" % (ftype, field_name)
                 )
 
         return excluded_fields
 
-    def to_mongo(self, _, **__):
-        fields = self.get_excluded_fields(
-            frames=False
-        ) + self.get_excluded_fields(frames=True)
-        if not fields:
+    def to_mongo(self, sample_collection):
+        excluded_fields = self.get_excluded_fields(
+            sample_collection, frames=False
+        )
+
+        excluded_frame_fields = [
+            sample_collection._FRAMES_PREFIX + f
+            for f in self.get_excluded_fields(sample_collection, frames=True)
+        ]
+
+        if excluded_frame_fields:
+            # Don't project on root `frames` and embedded fields
+            # https://docs.mongodb.com/manual/reference/operator/aggregation/project/#path-collision-errors-in-embedded-fields
+            excluded_fields = [f for f in excluded_fields if f != "frames"]
+            excluded_fields += excluded_frame_fields
+
+        if not excluded_fields:
             return []
 
-        return [{"$unset": fields}]
+        return [{"$unset": excluded_fields}]
+
+    def _needs_frames(self, sample_collection):
+        return any(
+            sample_collection._is_frame_field(f) for f in self.field_names
+        )
 
     def _kwargs(self):
         return [["field_names", self._field_names]]
@@ -385,8 +427,7 @@ class ExcludeFields(ViewStage):
 
     def validate(self, sample_collection):
         # Using dataset here allows a field to be excluded multiple times
-        self._dataset = sample_collection._dataset
-        self._dataset.validate_fields_exist(self.field_names)
+        sample_collection._dataset.validate_fields_exist(self.field_names)
 
 
 class ExcludeLabels(ViewStage):
@@ -483,9 +524,9 @@ class ExcludeLabels(ViewStage):
 
     Args:
         labels (None): a list of dicts specifying the labels to exclude
-        ids (None): a list of IDs of the labels to exclude
-        tags (None): a list of tags of labels to exclude
-        fields (None): a list of fields from which to exclude labels
+        ids (None): an ID or iterable of IDs of the labels to exclude
+        tags (None): a tag or iterable of tags of labels to exclude
+        fields (None): a field or iterable of fields from which to exclude
     """
 
     def __init__(self, labels=None, ids=None, tags=None, fields=None):
@@ -496,12 +537,18 @@ class ExcludeLabels(ViewStage):
 
         if etau.is_str(ids):
             ids = [ids]
+        elif ids is not None:
+            ids = list(ids)
 
         if etau.is_str(tags):
             tags = [tags]
+        elif tags is not None:
+            tags = list(tags)
 
         if etau.is_str(fields):
             fields = [fields]
+        elif fields is not None:
+            fields = list(fields)
 
         self._labels = labels
         self._ids = ids
@@ -531,7 +578,7 @@ class ExcludeLabels(ViewStage):
         """A list of fields from which labels are being excluded."""
         return self._fields
 
-    def to_mongo(self, _, **__):
+    def to_mongo(self, _):
         if self._pipeline is None:
             raise ValueError(
                 "`validate()` must be called before using a %s stage"
@@ -553,41 +600,48 @@ class ExcludeLabels(ViewStage):
         return [
             {
                 "name": "labels",
-                "type": "dict|NoneType",  # @todo use "list<dict>" when supported
+                "type": "NoneType|dict",  # @todo use "list<dict>" when supported
                 "placeholder": "[{...}]",
                 "default": "None",
             },
             {
                 "name": "ids",
-                "type": "list<id>|id|NoneType",
+                "type": "NoneType|list<id>|id",
                 "placeholder": "...",
                 "default": "None",
             },
             {
                 "name": "tags",
-                "type": "list<str>|str|NoneType",
+                "type": "NoneType|list<str>|str",
                 "placeholder": "...",
                 "default": "None",
             },
             {
                 "name": "fields",
-                "type": "list<str>|str|NoneType",
+                "type": "NoneType|list<str>|str",
                 "placeholder": "...",
                 "default": "None",
             },
         ]
 
-    def _make_labels_pipeline(self, sample_collection):
-        label_schema = sample_collection.get_field_schema(
-            ftype=fof.EmbeddedDocumentField, embedded_doc_type=fol.Label
-        )
+    def _needs_frames(self, sample_collection):
+        if self._labels is not None:
+            fields = self._labels_map.keys()
+        elif self._fields is not None:
+            fields = self._fields
+        else:
+            fields = sample_collection._get_label_fields()
 
+        return any(sample_collection._is_frame_field(f) for f in fields)
+
+    def _make_labels_pipeline(self, sample_collection):
         pipeline = []
         for field, labels_map in self._labels_map.items():
+            label_type = sample_collection._get_label_field_type(field)
             label_filter = ~F("_id").is_in(
                 [foe.ObjectId(_id) for _id in labels_map]
             )
-            stage = _make_label_filter_stage(label_schema, field, label_filter)
+            stage = _make_label_filter_stage(field, label_type, label_filter)
             if stage is None:
                 continue
 
@@ -600,12 +654,7 @@ class ExcludeLabels(ViewStage):
         if self._fields is not None:
             fields = self._fields
         else:
-            fields = list(
-                sample_collection.get_field_schema(
-                    ftype=fof.EmbeddedDocumentField,
-                    embedded_doc_type=fol.Label,
-                ).keys()
-            )
+            fields = sample_collection._get_label_fields()
 
         pipeline = []
 
@@ -645,15 +694,9 @@ class ExcludeLabels(ViewStage):
         # Filter empty samples
         match_exprs = []
         for field in fields:
-            label_type = sample_collection._get_label_field_type(field)
-            if issubclass(label_type, fol._LABEL_LIST_FIELDS):
-                match_expr = (
-                    F(field + "." + label_type._LABEL_LIST_FIELD).length() > 0
-                )
-            else:
-                match_expr = F(field) != None
-
-            match_exprs.append(match_expr)
+            match_exprs.append(
+                _get_label_field_only_matches_expr(sample_collection, field)
+            )
 
         stage = Match(F.any(match_exprs))
         stage.validate(sample_collection)
@@ -670,7 +713,7 @@ class ExcludeLabels(ViewStage):
 
 class Exists(ViewStage):
     """Returns a view containing the samples in a collection that have (or do
-    not have) a non-``None`` value for the given field.
+    not have) a non-``None`` value for the given field or embedded field.
 
     Examples::
 
@@ -691,10 +734,15 @@ class Exists(ViewStage):
                 ),
                 fo.Sample(
                     filepath="/path/to/image3.png",
+                    ground_truth=fo.Classification(label="dog"),
+                    predictions=fo.Classification(label="dog"),
+                ),
+                fo.Sample(
+                    filepath="/path/to/image4.png",
                     ground_truth=None,
                     predictions=None,
                 ),
-                fo.Sample(filepath="/path/to/image4.png"),
+                fo.Sample(filepath="/path/to/image5.png"),
             ]
         )
 
@@ -713,8 +761,15 @@ class Exists(ViewStage):
         stage = fo.Exists("predictions", False)
         view = dataset.add_stage(stage)
 
+        #
+        # Only include samples that have prediction confidences
+        #
+
+        stage = fo.Exists("predictions.confidence")
+        view = dataset.add_stage(stage)
+
     Args:
-        field: the field name
+        field: the field name or ``embedded.field.name``
         bool (True): whether to check if the field exists (True) or does not
             exist (False)
     """
@@ -735,9 +790,23 @@ class Exists(ViewStage):
         """
         return self._bool
 
-    def to_mongo(self, _, **__):
-        expr = F(self._field).exists(self._bool)
-        return [{"$match": {"$expr": expr.to_mongo()}}]
+    def to_mongo(self, sample_collection):
+        field_name, is_frame_field = sample_collection._handle_frame_field(
+            self._field
+        )
+
+        if not is_frame_field:
+            expr = F(field_name).exists(self._bool)
+            return [{"$match": {"$expr": expr.to_mongo()}}]
+
+        expr = F("frames").filter(F(field_name).exists(self._bool))
+        return [
+            {"$set": {"frames": expr.to_mongo()}},
+            {"$match": {"$expr": (F("frames").length() > 0).to_mongo()}},
+        ]
+
+    def _needs_frames(self, sample_collection):
+        return sample_collection._is_frame_field(self._field)
 
     def _kwargs(self):
         return [["field", self._field], ["bool", self._bool]]
@@ -809,16 +878,16 @@ class FilterField(ViewStage):
     Args:
         field: the name of the field to filter
         filter: a :class:`fiftyone.core.expressions.ViewExpression` or
-            `MongoDB expression <https://docs.mongodb.com/manual/meta/aggregation-quick-reference/#aggregation-expressions>`_
+            `MongoDB aggregation expression <https://docs.mongodb.com/manual/meta/aggregation-quick-reference/#aggregation-expressions>`_
             that returns a boolean describing the filter to apply
         only_matches (True): whether to only include samples that match the
             filter (True) or include all samples (False)
     """
 
-    def __init__(self, field, filter, only_matches=True):
+    def __init__(self, field, filter, only_matches=True, _new_field=None):
         self._field = field
         self._filter = filter
-        self._hide_result = False
+        self._new_field = _new_field or field
         self._only_matches = only_matches
         self._is_frame_field = None
         self._validate_params()
@@ -856,7 +925,6 @@ class FilterField(ViewStage):
             new_field,
             self._filter,
             only_matches=self._only_matches,
-            hide_result=self._hide_result,
         )
 
     def _get_mongo_filter(self):
@@ -869,10 +937,7 @@ class FilterField(ViewStage):
         return _get_field_mongo_filter(self._filter, prefix=self._field)
 
     def _get_new_field(self, sample_collection):
-        field, _ = sample_collection._handle_frame_field(self._field)
-
-        if self._hide_result:
-            return "__" + field
+        field, _ = sample_collection._handle_frame_field(self._new_field)
 
         return field
 
@@ -902,8 +967,8 @@ class FilterField(ViewStage):
     def _validate_params(self):
         if not isinstance(self._filter, (foe.ViewExpression, dict)):
             raise ValueError(
-                "Filter must be a ViewExpression or a MongoDB expression; "
-                "found '%s'" % self._filter
+                "Filter must be a ViewExpression or a MongoDB aggregation "
+                "expression; found '%s'" % self._filter
             )
 
     def validate(self, sample_collection):
@@ -917,17 +982,18 @@ class FilterField(ViewStage):
 
 
 def _get_filter_field_pipeline(
-    filter_field, new_field, filter_arg, only_matches=True, hide_result=False
+    filter_field, new_field, filter_arg, only_matches=True, prefix=""
 ):
-    cond = _get_field_mongo_filter(filter_arg, prefix=filter_field)
+    cond = _get_field_mongo_filter(filter_arg, prefix=prefix + filter_field)
 
     pipeline = [
         {
             "$set": {
-                new_field: {
+                prefix
+                + new_field: {
                     "$cond": {
                         "if": cond,
-                        "then": "$" + filter_field,
+                        "then": "$" + prefix + filter_field,
                         "else": None,
                     }
                 }
@@ -936,20 +1002,22 @@ def _get_filter_field_pipeline(
     ]
 
     if only_matches:
-        pipeline.append(
-            {"$match": {"$expr": F(new_field).exists().to_mongo()}}
-        )
-
-    if hide_result:
-        pipeline.append({"$unset": new_field})
+        match_expr = _get_field_only_matches_expr(prefix + new_field)
+        pipeline.append({"$match": {"$expr": match_expr.to_mongo()}})
 
     return pipeline
 
 
+def _get_field_only_matches_expr(field):
+    return F(field).exists()
+
+
 def _get_filter_frames_field_pipeline(
-    filter_field, new_field, filter_arg, only_matches=True, hide_result=False,
+    filter_field, new_field, filter_arg, only_matches=True, prefix=""
 ):
-    cond = _get_field_mongo_filter(filter_arg, prefix="$frame." + filter_field)
+    cond = _get_field_mongo_filter(
+        filter_arg, prefix="$frame." + prefix + filter_field
+    )
 
     pipeline = [
         {
@@ -962,10 +1030,13 @@ def _get_filter_frames_field_pipeline(
                             "$mergeObjects": [
                                 "$$frame",
                                 {
-                                    new_field: {
+                                    prefix
+                                    + new_field: {
                                         "$cond": {
                                             "if": cond,
-                                            "then": "$$frame." + filter_field,
+                                            "then": "$$frame."
+                                            + prefix
+                                            + filter_field,
                                             "else": None,
                                         }
                                     }
@@ -979,46 +1050,14 @@ def _get_filter_frames_field_pipeline(
     ]
 
     if only_matches:
-        pipeline.append(
-            {
-                "$match": {
-                    "$expr": {
-                        "$gt": [
-                            {
-                                "$reduce": {
-                                    "input": "$frames",
-                                    "initialValue": 0,
-                                    "in": {
-                                        "$sum": [
-                                            "$$value",
-                                            {
-                                                "$cond": [
-                                                    {
-                                                        "$ne": [
-                                                            "$$this."
-                                                            + new_field,
-                                                            None,
-                                                        ]
-                                                    },
-                                                    1,
-                                                    0,
-                                                ]
-                                            },
-                                        ]
-                                    },
-                                }
-                            },
-                            0,
-                        ]
-                    }
-                }
-            }
-        )
-
-    if hide_result:
-        pipeline.append({"$unset": "frames." + new_field})
+        match_expr = _get_frames_field_only_matches_expr(prefix + new_field)
+        pipeline.append({"$match": {"$expr": match_expr.to_mongo()}})
 
     return pipeline
+
+
+def _get_frames_field_only_matches_expr(field):
+    return F("frames").reduce(VALUE + F(field).exists().to_int()) > 0
 
 
 def _get_field_mongo_filter(filter_arg, prefix="$this"):
@@ -1298,17 +1337,20 @@ class FilterLabels(FilterField):
     Args:
         field: the labels field to filter
         filter: a :class:`fiftyone.core.expressions.ViewExpression` or
-            `MongoDB expression <https://docs.mongodb.com/manual/meta/aggregation-quick-reference/#aggregation-expressions>`_
+            `MongoDB aggregation expression <https://docs.mongodb.com/manual/meta/aggregation-quick-reference/#aggregation-expressions>`_
             that returns a boolean describing the filter to apply
         only_matches (True): whether to only include samples with at least
             one label after filtering (True) or include all samples (False)
     """
 
-    def __init__(self, field, filter, only_matches=True):
+    def __init__(
+        self, field, filter, only_matches=True, _new_field=None, _prefix=""
+    ):
         self._field = field
         self._filter = filter
+        self._new_field = _new_field or field
         self._only_matches = only_matches
-        self._hide_result = False
+        self._prefix = _prefix
         self._labels_field = None
         self._is_frame_field = None
         self._is_labels_list_field = None
@@ -1344,7 +1386,7 @@ class FilterLabels(FilterField):
             new_field,
             self._filter,
             only_matches=self._only_matches,
-            hide_result=self._hide_result,
+            prefix=self._prefix,
         )
 
     def _needs_frames(self, sample_collection):
@@ -1374,55 +1416,55 @@ class FilterLabels(FilterField):
     def _get_new_field(self, sample_collection):
         field, _ = sample_collection._handle_frame_field(self._labels_field)
 
-        if self._hide_result:
-            return "__%s" % field
+        new_field = self._new_field
+        if self._new_field.startswith(sample_collection._FRAMES_PREFIX):
+            new_field = new_field[len(sample_collection._FRAMES_PREFIX) :]
 
-        return field
+        if "." in field:
+            return ".".join([new_field, field.split(".")[-1]])
+
+        return new_field
 
     def validate(self, sample_collection):
         self._get_labels_field(sample_collection)
 
 
 def _get_filter_list_field_pipeline(
-    filter_field, new_field, filter_arg, only_matches=True, hide_result=False
+    filter_field, new_field, filter_arg, only_matches=True, prefix=""
 ):
     cond = _get_list_field_mongo_filter(filter_arg)
-
     pipeline = [
         {
             "$set": {
-                filter_field: {
-                    "$filter": {"input": "$" + filter_field, "cond": cond}
+                prefix
+                + new_field: {
+                    "$filter": {
+                        "input": "$" + prefix + filter_field,
+                        "cond": cond,
+                    }
                 }
             }
         }
     ]
 
     if only_matches:
-        pipeline.append(
-            {
-                "$match": {
-                    filter_field: {
-                        "$gt": [
-                            {"$size": {"$ifNull": ["$" + filter_field, []]}},
-                            0,
-                        ]
-                    }
-                }
-            }
-        )
-
-    if hide_result:
-        pipeline.append({"$unset": new_field})
+        match_expr = _get_list_field_only_matches_expr(prefix + new_field)
+        pipeline.append({"$match": {"$expr": match_expr.to_mongo()}})
 
     return pipeline
 
 
+def _get_list_field_only_matches_expr(field):
+    return F(field).length() > 0
+
+
 def _get_filter_frames_list_field_pipeline(
-    filter_field, new_field, filter_arg, only_matches=True, hide_result=False,
+    filter_field, new_field, filter_arg, only_matches=True, prefix=""
 ):
     cond = _get_list_field_mongo_filter(filter_arg)
-    label_field, labels_list = new_field.split(".")
+    label_field, labels_list = new_field.split(".")[-2:]
+
+    old_field = filter_field.split(".")[0]
 
     pipeline = [
         {
@@ -1435,13 +1477,15 @@ def _get_filter_frames_list_field_pipeline(
                             "$mergeObjects": [
                                 "$$frame",
                                 {
-                                    label_field: {
+                                    prefix
+                                    + label_field: {
                                         "$mergeObjects": [
-                                            "$$frame." + label_field,
+                                            "$$frame." + prefix + old_field,
                                             {
                                                 labels_list: {
                                                     "$filter": {
                                                         "input": "$$frame."
+                                                        + prefix
                                                         + filter_field,
                                                         "cond": cond,
                                                     }
@@ -1459,42 +1503,16 @@ def _get_filter_frames_list_field_pipeline(
     ]
 
     if only_matches:
-        pipeline.append(
-            {
-                "$match": {
-                    "$expr": {
-                        "$gt": [
-                            {
-                                "$reduce": {
-                                    "input": "$frames",
-                                    "initialValue": 0,
-                                    "in": {
-                                        "$sum": [
-                                            "$$value",
-                                            {
-                                                "$size": {
-                                                    "$filter": {
-                                                        "input": "$$this."
-                                                        + new_field,
-                                                        "cond": cond,
-                                                    }
-                                                }
-                                            },
-                                        ]
-                                    },
-                                }
-                            },
-                            0,
-                        ]
-                    }
-                }
-            }
+        match_expr = _get_frames_list_field_only_matches_expr(
+            prefix + new_field
         )
-
-    if hide_result:
-        pipeline.append({"$unset": "frames." + new_field})
+        pipeline.append({"$match": {"$expr": match_expr.to_mongo()}})
 
     return pipeline
+
+
+def _get_frames_list_field_only_matches_expr(field):
+    return F("frames").reduce(VALUE + F(field).length()) > 0
 
 
 def _get_list_field_mongo_filter(filter_arg, prefix="$this"):
@@ -1506,12 +1524,9 @@ def _get_list_field_mongo_filter(filter_arg, prefix="$this"):
 
 class _FilterListField(FilterField):
     def _get_new_field(self, sample_collection):
-        field = self._filter_field
+        field = self._new_field
         if self._needs_frames(sample_collection):
             field = field.split(".", 1)[1]  # remove `frames`
-
-        if self._hide_result:
-            return "__" + field
 
         return field
 
@@ -1538,7 +1553,6 @@ class _FilterListField(FilterField):
             new_field,
             self._filter,
             only_matches=self._only_matches,
-            hide_result=self._hide_result,
         )
 
     def _get_mongo_filter(self):
@@ -1563,7 +1577,7 @@ class FilterClassifications(_FilterListField):
         field: the field to filter, which must be a
             :class:`fiftyone.core.labels.Classifications`
         filter: a :class:`fiftyone.core.expressions.ViewExpression` or
-            `MongoDB expression <https://docs.mongodb.com/manual/meta/aggregation-quick-reference/#aggregation-expressions>`_
+            `MongoDB aggregation expression <https://docs.mongodb.com/manual/meta/aggregation-quick-reference/#aggregation-expressions>`_
             that returns a boolean describing the filter to apply
         only_matches (True): whether to only include samples with at least
             one classification after filtering (True) or include all samples
@@ -1597,7 +1611,7 @@ class FilterDetections(_FilterListField):
         field: the field to filter, which must be a
             :class:`fiftyone.core.labels.Detections`
         filter: a :class:`fiftyone.core.expressions.ViewExpression` or
-            `MongoDB expression <https://docs.mongodb.com/manual/meta/aggregation-quick-reference/#aggregation-expressions>`_
+            `MongoDB aggregation expression <https://docs.mongodb.com/manual/meta/aggregation-quick-reference/#aggregation-expressions>`_
             that returns a boolean describing the filter to apply
         only_matches (True): whether to only include samples with at least
             one detection after filtering (True) or include all samples (False)
@@ -1630,7 +1644,7 @@ class FilterPolylines(_FilterListField):
         field: the field to filter, which must be a
             :class:`fiftyone.core.labels.Polylines`
         filter: a :class:`fiftyone.core.expressions.ViewExpression` or
-            `MongoDB expression <https://docs.mongodb.com/manual/meta/aggregation-quick-reference/#aggregation-expressions>`_
+            `MongoDB aggregation expression <https://docs.mongodb.com/manual/meta/aggregation-quick-reference/#aggregation-expressions>`_
             that returns a boolean describing the filter to apply
         only_matches (True): whether to only include samples with at least
             one polyline after filtering (True) or include all samples (False)
@@ -1663,7 +1677,7 @@ class FilterKeypoints(_FilterListField):
         field: the field to filter, which must be a
             :class:`fiftyone.core.labels.Keypoints`
         filter: a :class:`fiftyone.core.expressions.ViewExpression` or
-            `MongoDB expression <https://docs.mongodb.com/manual/meta/aggregation-quick-reference/#aggregation-expressions>`_
+            `MongoDB aggregation expression <https://docs.mongodb.com/manual/meta/aggregation-quick-reference/#aggregation-expressions>`_
             that returns a boolean describing the filter to apply
         only_matches (True): whether to only include samples with at least
             one keypoint after filtering (True) or include all samples (False)
@@ -1679,6 +1693,315 @@ class FilterKeypoints(_FilterListField):
             fof.EmbeddedDocumentField,
             embedded_doc_type=fol.Keypoints,
         )
+
+
+class _GeoStage(ViewStage):
+    def __init__(self, location_field):
+        self._location_field = location_field
+        self._location_key = None
+
+    @property
+    def location_field(self):
+        """The location field."""
+        return self._location_field
+
+    def validate(self, sample_collection):
+        if self._location_field is None:
+            self._location_field = sample_collection._get_geo_location_field()
+
+        if sample_collection._is_label_field(
+            self._location_field, fol.GeoLocation
+        ):
+            # Assume the user meant the `.point` field
+            self._location_key = self._location_field + ".point"
+        else:
+            # Assume the user directly specified the subfield to use
+            self._location_key = self._location_field
+
+        # These operations require a `sphere2d` index
+        sample_collection.create_index(self._location_key, sphere2d=True)
+
+
+class GeoNear(_GeoStage):
+    """Sorts the samples in a collection by their proximity to a specified
+    geolocation.
+
+    .. note::
+
+        This stage must be the **first stage** in any
+        :class:`fiftyone.core.view.DatasetView` in which it appears.
+
+    Examples::
+
+        import fiftyone as fo
+        import fiftyone.zoo as foz
+
+        TIMES_SQUARE = [-73.9855, 40.7580]
+
+        dataset = foz.load_zoo_dataset("quickstart-geo")
+
+        #
+        # Sort the samples by their proximity to Times Square
+        #
+
+        stage = fo.GeoNear(TIMES_SQUARE)
+        view = dataset.add_stage(stage)
+
+        #
+        # Sort the samples by their proximity to Times Square, and only
+        # include samples within 5km
+        #
+
+        stage = fo.GeoNear(TIMES_SQUARE, max_distance=5000)
+        view = dataset.add_stage(stage)
+
+        #
+        # Sort the samples by their proximity to Times Square, and only
+        # include samples that are in Manhattan
+        #
+
+        import fiftyone.utils.geojson as foug
+
+        in_manhattan = foug.geo_within(
+            "location.point",
+            [
+                [
+                    [-73.949701, 40.834487],
+                    [-73.896611, 40.815076],
+                    [-73.998083, 40.696534],
+                    [-74.031751, 40.715273],
+                    [-73.949701, 40.834487],
+                ]
+            ]
+        )
+
+        stage = fo.GeoNear(
+            TIMES_SQUARE, location_field="location", query=in_manhattan
+        )
+        view = dataset.add_stage(stage)
+
+    Args:
+        point: the reference point to compute distances to. Can be any of the
+            following:
+
+            -   A ``[longitude, latitude]`` list
+            -   A GeoJSON dict with ``Point`` type
+            -   A :class:`fiftyone.core.labels.GeoLocation` instance whose
+                ``point`` attribute contains the point
+
+        location_field (None): the location data of each sample to use. Can be
+            any of the following:
+
+            -   The name of a :class:`fiftyone.core.fields.GeoLocation` field
+                whose ``point`` attribute to use as location data
+            -   An ``embedded.field.name`` containing GeoJSON data to use as
+                location data
+            -   ``None``, in which case there must be a single
+                :class:`fiftyone.core.fields.GeoLocation` field on the samples,
+                which is used by default
+
+        min_distance (None): filter samples that are less than this distance
+            (in meters) from ``point``
+        max_distance (None): filter samples that are greater than this distance
+            (in meters) from ``point``
+        query (None): an optional dict defining a
+            `MongoDB read query <https://docs.mongodb.com/manual/tutorial/query-documents/#read-operations-query-argument>`_
+            that samples must match in order to be included in this view
+    """
+
+    def __init__(
+        self,
+        point,
+        location_field=None,
+        min_distance=None,
+        max_distance=None,
+        query=None,
+    ):
+        super().__init__(location_field)
+        self._point = foug.parse_point(point)
+        self._min_distance = min_distance
+        self._max_distance = max_distance
+        self._query = query
+
+    @property
+    def point(self):
+        """The point to search proximity to."""
+        return self._point
+
+    @property
+    def min_distance(self):
+        """The minimum distance for matches, in meters."""
+        return self._min_distance
+
+    @property
+    def max_distance(self):
+        """The maximum distance for matches, in meters."""
+        return self._max_distance
+
+    @property
+    def query(self):
+        """A query dict specifying a match condition."""
+        return self._query
+
+    def to_mongo(self, _, **__):
+        distance_field = self._location_field + "._distance"
+
+        geo_near_expr = {
+            "near": self._point,
+            "key": self._location_key,
+            "distanceField": distance_field,
+            "spherical": True,
+        }
+
+        if self._min_distance is not None:
+            geo_near_expr["minDistance"] = self._min_distance
+
+        if self._max_distance is not None:
+            geo_near_expr["maxDistance"] = self._max_distance
+
+        if self._query is not None:
+            geo_near_expr["query"] = self._query
+
+        return [{"$geoNear": geo_near_expr}, {"$unset": distance_field}]
+
+    def _kwargs(self):
+        return [
+            ["point", self._point],
+            ["location_field", self._location_field],
+            ["min_distance", self._min_distance],
+            ["max_distance", self._max_distance],
+            ["query", self._query],
+        ]
+
+    @classmethod
+    def _params(self):
+        return [
+            {"name": "point", "type": "dict", "placeholder": ""},
+            {
+                "name": "location_field",
+                "type": "NoneType|field",
+                "placeholder": "",
+                "default": "None",
+            },
+            {
+                "name": "min_distance",
+                "type": "NoneType|float",
+                "placeholder": "min distance (meters)",
+                "default": "None",
+            },
+            {
+                "name": "max_distance",
+                "type": "NoneType|float",
+                "placeholder": "max distance (meters)",
+                "default": "None",
+            },
+            {
+                "name": "query",
+                "type": "NoneType|dict",
+                "placeholder": "",
+                "default": "None",
+            },
+        ]
+
+
+class GeoWithin(_GeoStage):
+    """Filters the samples in a collection to only match samples whose
+    geolocation is within a specified boundary.
+
+    Examples::
+
+        import fiftyone as fo
+        import fiftyone.zoo as foz
+
+        MANHATTAN = [
+            [
+                [-73.949701, 40.834487],
+                [-73.896611, 40.815076],
+                [-73.998083, 40.696534],
+                [-74.031751, 40.715273],
+                [-73.949701, 40.834487],
+            ]
+        ]
+
+        dataset = foz.load_zoo_dataset("quickstart-geo")
+
+        #
+        # Create a view that only contains samples in Manhattan
+        #
+
+        stage = fo.GeoWithin(MANHATTAN)
+        view = dataset.add_stage(stage)
+
+    Args:
+        boundary: a :class:`fiftyone.core.labels.GeoLocation`,
+            :class:`fiftyone.core.labels.GeoLocations`, GeoJSON dict, or list
+            of coordinates that define a ``Polygon`` or ``MultiPolygon`` to
+            search within
+        location_field (None): the location data of each sample to use. Can be
+            any of the following:
+
+            -   The name of a :class:`fiftyone.core.fields.GeoLocation` field
+                whose ``point`` attribute to use as location data
+            -   An ``embedded.field.name`` that directly contains the GeoJSON
+                location data to use
+            -   ``None``, in which case there must be a single
+                :class:`fiftyone.core.fields.GeoLocation` field on the samples,
+                which is used by default
+
+        strict (True): whether a sample's location data must strictly fall
+            within boundary (True) in order to match, or whether any
+            intersection suffices (False)
+    """
+
+    def __init__(self, boundary, location_field=None, strict=True):
+        super().__init__(location_field)
+        self._boundary = foug.parse_polygon(boundary)
+        self._strict = strict
+
+    @property
+    def boundary(self):
+        """A GeoJSON dict describing the boundary to match within."""
+        return self._boundary
+
+    @property
+    def strict(self):
+        """Whether matches must be strictly contained in the boundary."""
+        return self._strict
+
+    def to_mongo(self, _, **__):
+        op = "$geoWithin" if self._strict else "$geoIntersects"
+        return [
+            {
+                "$match": {
+                    self._location_key: {op: {"$geometry": self._boundary}}
+                }
+            }
+        ]
+
+    def _kwargs(self):
+        return [
+            ["boundary", self._boundary],
+            ["location_field", self._location_field],
+            ["strict", self._strict],
+        ]
+
+    @classmethod
+    def _params(self):
+        return [
+            {"name": "boundary", "type": "dict", "placeholder": ""},
+            {
+                "name": "location_field",
+                "type": "NoneType|field",
+                "placeholder": "",
+                "default": "None",
+            },
+            {
+                "name": "strict",
+                "type": "bool",
+                "default": "True",
+                "placeholder": "strict (default=True)",
+            },
+        ]
 
 
 class Limit(ViewStage):
@@ -1726,7 +2049,7 @@ class Limit(ViewStage):
         """The maximum number of samples to return."""
         return self._limit
 
-    def to_mongo(self, _, **__):
+    def to_mongo(self, _):
         if self._limit <= 0:
             return [{"$match": {"_id": None}}]
 
@@ -1825,7 +2148,7 @@ class LimitLabels(ViewStage):
         """The maximum number of labels to return in each sample."""
         return self._limit
 
-    def to_mongo(self, sample_collection, **_):
+    def to_mongo(self, sample_collection):
         self._labels_list_field = _get_labels_list_field(
             sample_collection, self._field
         )
@@ -1961,7 +2284,7 @@ class MapLabels(ViewStage):
         """The labels map dict."""
         return self._map
 
-    def to_mongo(self, sample_collection, **_):
+    def to_mongo(self, sample_collection):
         labels_field, _, is_frame_field = _get_labels_field(
             sample_collection, self._field
         )
@@ -2089,18 +2412,19 @@ class SetField(ViewStage):
 
     Args:
         field: the field or embedded field to set
-        expr: a :class:`fiftyone.core.expressions.ViewExpression` or
-            `MongoDB expression <https://docs.mongodb.com/manual/meta/aggregation-quick-reference/#aggregation-expressions>`_
+        expr: a :class:`fiftyone.core.expressions.ViewExpression or
+            `MongoDB aggregation expression <https://docs.mongodb.com/manual/meta/aggregation-quick-reference/#aggregation-expressions>`_
             that defines the field value to set
     """
 
-    def __init__(self, field, expr):
+    def __init__(self, field, expr, _allow_missing=False):
         if isinstance(expr, MongoEngineBaseDocument):
             expr = expr.to_dict()
             expr.pop("_id", None)
 
         self._field = field
         self._expr = expr
+        self._allow_missing = _allow_missing
 
     @property
     def field(self):
@@ -2120,9 +2444,12 @@ class SetField(ViewStage):
         is_frame_expr = _is_frames_expr(self._get_mongo_expr())
         return is_frame_field or is_frame_expr
 
-    def to_mongo(self, sample_collection, **_):
+    def to_mongo(self, sample_collection):
         return sample_collection._make_set_field_pipeline(
-            self._field, self._expr, embedded_root=True
+            self._field,
+            self._expr,
+            embedded_root=True,
+            allow_missing=self._allow_missing,
         )
 
     def _kwargs(self):
@@ -2133,9 +2460,11 @@ class SetField(ViewStage):
 
     @classmethod
     def _params(self):
+        # @todo `expr` can actually be any valid JSON, including ints, strings
+        # lists, etc
         return [
             {"name": "field", "type": "field"},
-            {"name": "expr", "type": "dict", "placeholder": ""},
+            {"name": "expr", "type": "NoneType|dict", "placeholder": ""},
         ]
 
     def _get_mongo_expr(self):
@@ -2151,6 +2480,9 @@ class SetField(ViewStage):
         return self._expr.to_mongo(prefix=prefix)
 
     def validate(self, sample_collection):
+        if self._allow_missing:
+            return
+
         sample_collection.validate_fields_exist(self._field)
 
 
@@ -2254,7 +2586,7 @@ class Match(ViewStage):
 
     Args:
         filter: a :class:`fiftyone.core.expressions.ViewExpression` or
-            `MongoDB expression <https://docs.mongodb.com/manual/meta/aggregation-quick-reference/#aggregation-expressions>`_
+            `MongoDB aggregation expression <https://docs.mongodb.com/manual/meta/aggregation-quick-reference/#aggregation-expressions>`_
             that returns a boolean describing the filter to apply
     """
 
@@ -2267,7 +2599,7 @@ class Match(ViewStage):
         """The filter expression."""
         return self._filter
 
-    def to_mongo(self, _, **__):
+    def to_mongo(self, _):
         return [{"$match": self._get_mongo_expr()}]
 
     def _get_mongo_expr(self):
@@ -2282,8 +2614,8 @@ class Match(ViewStage):
     def _validate_params(self):
         if not isinstance(self._filter, (foe.ViewExpression, dict)):
             raise ValueError(
-                "Filter must be a ViewExpression or a MongoDB expression; "
-                "found '%s'" % self._filter
+                "Filter must be a ViewExpression or a MongoDB aggregation "
+                "expression; found '%s'" % self._filter
             )
 
     @classmethod
@@ -2353,7 +2685,7 @@ class MatchTags(ViewStage):
         """The list of tags to match."""
         return self._tags
 
-    def to_mongo(self, _, **__):
+    def to_mongo(self, _):
         return [{"$match": {"tags": {"$in": self._tags}}}]
 
     def _kwargs(self):
@@ -2468,7 +2800,7 @@ class Mongo(ViewStage):
         """The MongoDB aggregation pipeline."""
         return self._pipeline
 
-    def to_mongo(self, _, **__):
+    def to_mongo(self, _):
         return self._pipeline
 
     def _kwargs(self):
@@ -2522,8 +2854,8 @@ class Select(ViewStage):
         """The list of sample IDs to select."""
         return self._sample_ids
 
-    def to_mongo(self, _, **__):
-        sample_ids = [ObjectId(id) for id in self._sample_ids]
+    def to_mongo(self, _):
+        sample_ids = [ObjectId(_id) for _id in self._sample_ids]
         return [{"$match": {"_id": {"$in": sample_ids}}}]
 
     def _kwargs(self):
@@ -2541,8 +2873,8 @@ class Select(ViewStage):
 
     def _validate_params(self):
         # Ensures that ObjectIDs are valid
-        for id in self._sample_ids:
-            ObjectId(id)
+        for _id in self._sample_ids:
+            ObjectId(_id)
 
 
 class SelectFields(ViewStage):
@@ -2597,51 +2929,69 @@ class SelectFields(ViewStage):
     def __init__(self, field_names=None):
         if etau.is_str(field_names):
             field_names = [field_names]
-        elif field_names:
+        elif field_names is not None:
             field_names = list(field_names)
 
         self._field_names = field_names
-        self._dataset = None
 
     @property
     def field_names(self):
         """The list of field names to select."""
         return self._field_names or []
 
-    def get_selected_fields(self, frames=False):
+    def get_selected_fields(self, sample_collection, frames=False):
         if frames:
-            default_fields = default_sample_fields(
-                DatasetFrameSampleDocument, include_private=True
+            default_fields = fofr.get_default_frame_fields(
+                include_private=True, include_id=True
             )
 
-            selected_fields = [
-                f[len(self._dataset._FRAMES_PREFIX) :]
-                for f in self.field_names
-                if f.startswith(self._dataset._FRAMES_PREFIX)
-            ]
+            selected_fields = []
+            for field in self.field_names:
+                (
+                    field_name,
+                    is_frame_field,
+                ) = sample_collection._handle_frame_field(field)
+                if is_frame_field:
+                    selected_fields.append(field_name)
         else:
-            default_fields = default_sample_fields(
-                DatasetSampleDocument, include_private=True
+            default_fields = fos.get_default_sample_fields(
+                include_private=True, include_id=True
             )
-            if not frames and (self._dataset.media_type == fom.VIDEO):
+            if sample_collection.media_type == fom.VIDEO:
                 default_fields += ("frames",)
 
-            selected_fields = [
-                f
-                for f in self.field_names
-                if not f.startswith(self._dataset._FRAMES_PREFIX)
-            ]
+            selected_fields = []
+            for field in self.field_names:
+                if not sample_collection._is_frame_field(field):
+                    selected_fields.append(field)
 
         return list(set(selected_fields) | set(default_fields))
 
-    def to_mongo(self, _, **__):
+    def to_mongo(self, sample_collection):
         selected_fields = self.get_selected_fields(
-            frames=False
-        ) + self.get_selected_fields(frames=True)
+            sample_collection, frames=False
+        )
+
+        selected_frame_fields = [
+            sample_collection._FRAMES_PREFIX + f
+            for f in self.get_selected_fields(sample_collection, frames=True)
+        ]
+
+        if selected_frame_fields:
+            # Don't project on root `frames` and embedded fields
+            # https://docs.mongodb.com/manual/reference/operator/aggregation/project/#path-collision-errors-in-embedded-fields
+            selected_fields = [f for f in selected_fields if f != "frames"]
+            selected_fields += selected_frame_fields
+
         if not selected_fields:
             return []
 
         return [{"$project": {fn: True for fn in selected_fields}}]
+
+    def _needs_frames(self, sample_collection):
+        return any(
+            sample_collection._is_frame_field(f) for f in self.field_names
+        )
 
     def _kwargs(self):
         return [["field_names", self._field_names]]
@@ -2665,7 +3015,6 @@ class SelectFields(ViewStage):
                 )
 
     def validate(self, sample_collection):
-        self._dataset = sample_collection._dataset
         sample_collection.validate_fields_exist(self.field_names)
 
 
@@ -2757,9 +3106,9 @@ class SelectLabels(ViewStage):
 
     Args:
         labels (None): a list of dicts specifying the labels to select
-        ids (None): a list of IDs of the labels to select
-        tags (None): a list of tags of labels to select
-        fields (None): a list of fields from which to select labels
+        ids (None): an ID or iterable of IDs of the labels to select
+        tags (None): a tag or iterable of tags of labels to select
+        fields (None): a field or iterable of fields from which to select
     """
 
     def __init__(self, labels=None, ids=None, tags=None, fields=None):
@@ -2770,12 +3119,18 @@ class SelectLabels(ViewStage):
 
         if etau.is_str(ids):
             ids = [ids]
+        elif ids is not None:
+            ids = list(ids)
 
         if etau.is_str(tags):
             tags = [tags]
+        elif tags is not None:
+            tags = list(tags)
 
         if etau.is_str(fields):
             fields = [fields]
+        elif fields is not None:
+            fields = list(fields)
 
         self._labels = labels
         self._ids = ids
@@ -2805,7 +3160,7 @@ class SelectLabels(ViewStage):
         """A list of fields from which labels are being selected."""
         return self._fields
 
-    def to_mongo(self, _, **__):
+    def to_mongo(self, _):
         if self._pipeline is None:
             raise ValueError(
                 "`validate()` must be called before using a %s stage"
@@ -2827,50 +3182,71 @@ class SelectLabels(ViewStage):
         return [
             {
                 "name": "labels",
-                "type": "dict|NoneType",  # @todo use "list<dict>" when supported
+                "type": "NoneType|dict",  # @todo use "list<dict>" when supported
                 "placeholder": "[{...}]",
                 "default": "None",
             },
             {
                 "name": "ids",
-                "type": "list<id>|id|NoneType",
+                "type": "NoneType|list<id>|id",
                 "placeholder": "...",
                 "default": "None",
             },
             {
                 "name": "tags",
-                "type": "list<str>|str|NoneType",
+                "type": "NoneType|list<str>|str",
                 "placeholder": "...",
                 "default": "None",
             },
             {
                 "name": "fields",
-                "type": "list<str>|str|NoneType",
+                "type": "NoneType|list<str>|str",
                 "placeholder": "...",
                 "default": "None",
             },
         ]
 
-    def _make_labels_pipeline(self, sample_collection):
-        label_schema = sample_collection.get_field_schema(
-            ftype=fof.EmbeddedDocumentField, embedded_doc_type=fol.Label
-        )
+    def _needs_frames(self, sample_collection):
+        if self._labels is not None:
+            fields = self._labels_map.keys()
+        elif self._fields is not None:
+            fields = self._fields
+        else:
+            fields = sample_collection._get_label_fields()
 
+        return any(sample_collection._is_frame_field(f) for f in fields)
+
+    def _make_labels_pipeline(self, sample_collection):
         pipeline = []
 
         stage = Select(self._sample_ids)
         stage.validate(sample_collection)
         pipeline.extend(stage.to_mongo(sample_collection))
 
-        stage = SelectFields(list(self._labels_map.keys()))
-        stage.validate(sample_collection)
-        pipeline.extend(stage.to_mongo(sample_collection))
+        #
+        # We know that only fields in `_labels_map` will have matches, so
+        # exclude other label fields
+        #
+        # Note that we don't implement `get_excluded_fields()` here, because
+        # our intention is not to remove other fields from the schema, only to
+        # empty their sample fields in the returned view
+        #
+
+        exclude_fields = list(
+            set(sample_collection._get_label_fields())
+            - set(self._labels_map.keys())
+        )
+        if exclude_fields:
+            stage = ExcludeFields(exclude_fields)
+            stage.validate(sample_collection)
+            pipeline.extend(stage.to_mongo(sample_collection))
 
         for field, labels_map in self._labels_map.items():
+            label_type = sample_collection._get_label_field_type(field)
             label_filter = F("_id").is_in(
                 [foe.ObjectId(_id) for _id in labels_map]
             )
-            stage = _make_label_filter_stage(label_schema, field, label_filter)
+            stage = _make_label_filter_stage(field, label_type, label_filter)
             if stage is None:
                 continue
 
@@ -2883,25 +3259,36 @@ class SelectLabels(ViewStage):
         if self._fields is not None:
             fields = self._fields
         else:
-            fields = list(
-                sample_collection.get_field_schema(
-                    ftype=fof.EmbeddedDocumentField,
-                    embedded_doc_type=fol.Label,
-                ).keys()
-            )
+            fields = sample_collection._get_label_fields()
+
+        num_fields = len(fields)
+        if num_fields == 0:
+            # Nothing will match
+            return [{"$match": {"_id": None}}]
 
         pipeline = []
 
-        # We know that only `fields` will have matches, so select them
-        stage = SelectFields(fields)
-        stage.validate(sample_collection)
-        pipeline.extend(stage.to_mongo(sample_collection))
+        #
+        # We know that only `fields` will have matches, so exclude other label
+        # fields
+        #
+        # Note that we don't implement `get_excluded_fields()` here, because
+        # our intention is not to remove other fields from the schema, only to
+        # empty their sample fields in the returned view
+        #
+
+        exclude_fields = list(
+            set(sample_collection._get_label_fields()) - set(fields)
+        )
+        if exclude_fields:
+            stage = ExcludeFields(exclude_fields)
+            stage.validate(sample_collection)
+            pipeline.extend(stage.to_mongo(sample_collection))
 
         # Handle early exit
-        num_fields = len(fields)
-        if num_fields == 0 or (self._ids is None and self._tags is None):
-            # Nothing will match
-            return pipeline + [{"$match": {"_id": None}}]
+        if self._ids is None and self._tags is None:
+            # If no filters are specified, match everything
+            return pipeline
 
         #
         # Filter labels that don't match `tags` and `ids
@@ -2933,15 +3320,9 @@ class SelectLabels(ViewStage):
         # Filter empty samples
         match_exprs = []
         for field in fields:
-            label_type = sample_collection._get_label_field_type(field)
-            if issubclass(label_type, fol._LABEL_LIST_FIELDS):
-                match_expr = (
-                    F(field + "." + label_type._LABEL_LIST_FIELD).length() > 0
-                )
-            else:
-                match_expr = F(field) != None
-
-            match_exprs.append(match_expr)
+            match_exprs.append(
+                _get_label_field_only_matches_expr(sample_collection, field)
+            )
 
         stage = Match(F.any(match_exprs))
         stage.validate(sample_collection)
@@ -3009,8 +3390,8 @@ class Shuffle(ViewStage):
         """The random seed to use, or ``None``."""
         return self._seed
 
-    def to_mongo(self, _, **__):
-        # @todo avoid creating new field here?
+    def to_mongo(self, _):
+        # @todo can we avoid creating a new field here?
         return [
             {"$set": {"_rand_shuffle": {"$mod": [self._randint, "$_rand"]}}},
             {"$sort": {"_rand_shuffle": ASCENDING}},
@@ -3025,11 +3406,11 @@ class Shuffle(ViewStage):
         return [
             {
                 "name": "seed",
-                "type": "float|NoneType",
+                "type": "NoneType|float",
                 "default": "None",
                 "placeholder": "seed (default=None)",
             },
-            {"name": "_randint", "type": "int|NoneType", "default": "None"},
+            {"name": "_randint", "type": "NoneType|int", "default": "None"},
         ]
 
 
@@ -3082,7 +3463,7 @@ class Skip(ViewStage):
         """The number of samples to skip."""
         return self._skip
 
-    def to_mongo(self, _, **__):
+    def to_mongo(self, _):
         if self._skip <= 0:
             return []
 
@@ -3101,7 +3482,7 @@ class SortBy(ViewStage):
 
     When sorting by an expression, ``field_or_expr`` can either be a
     :class:`fiftyone.core.expressions.ViewExpression` or a
-    `MongoDB expression <https://docs.mongodb.com/manual/meta/aggregation-quick-reference/#aggregation-expressions>`_
+    `MongoDB aggregation expression <https://docs.mongodb.com/manual/meta/aggregation-quick-reference/#aggregation-expressions>`_
     that defines the quantity to sort by.
 
     Examples::
@@ -3151,7 +3532,7 @@ class SortBy(ViewStage):
         """Whether to return the results in descending order."""
         return self._reverse
 
-    def to_mongo(self, _, **__):
+    def to_mongo(self, _):
         order = DESCENDING if self._reverse else ASCENDING
 
         field_or_expr = self._get_mongo_field_or_expr()
@@ -3269,7 +3650,7 @@ class Take(ViewStage):
         """The random seed to use, or ``None``."""
         return self._seed
 
-    def to_mongo(self, _, **__):
+    def to_mongo(self, _):
         if self._size <= 0:
             return [{"$match": {"_id": None}}]
 
@@ -3294,11 +3675,11 @@ class Take(ViewStage):
             {"name": "size", "type": "int", "placeholder": "int"},
             {
                 "name": "seed",
-                "type": "float|NoneType",
+                "type": "NoneType|float",
                 "default": "None",
                 "placeholder": "seed (default=None)",
             },
-            {"name": "_randint", "type": "int|NoneType", "default": "None"},
+            {"name": "_randint", "type": "NoneType|int", "default": "None"},
         ]
 
 
@@ -3313,7 +3694,7 @@ def _get_sample_ids(samples_or_ids):
         return [samples_or_ids.id]
 
     if isinstance(samples_or_ids, foc.SampleCollection):
-        return [s.id for s in samples_or_ids.select_fields()]
+        return samples_or_ids.values("id")
 
     if not samples_or_ids:
         return []
@@ -3398,12 +3779,7 @@ def _parse_labels(labels):
     return sample_ids, labels_map
 
 
-def _make_label_filter_stage(label_schema, field, label_filter):
-    if field not in label_schema:
-        raise ValueError("Sample collection has no label field '%s'" % field)
-
-    label_type = label_schema[field].document_type
-
+def _make_label_filter_stage(field, label_type, label_filter):
     if label_type in fol._SINGLE_LABEL_FIELDS:
         return FilterField(field, label_filter)
 
@@ -3426,6 +3802,28 @@ def _is_frames_expr(val):
         return [_is_frames_expr(v) for v in val]
 
     return False
+
+
+def _get_label_field_only_matches_expr(sample_collection, field, prefix=""):
+    label_type = sample_collection._get_label_field_type(field)
+    field, is_frame_field = sample_collection._handle_frame_field(field)
+    is_label_list_field = issubclass(label_type, fol._LABEL_LIST_FIELDS)
+
+    if is_label_list_field:
+        field += "." + label_type._LABEL_LIST_FIELD
+
+    if is_frame_field:
+        if is_label_list_field:
+            match_fcn = _get_frames_list_field_only_matches_expr
+        else:
+            match_fcn = _get_frames_field_only_matches_expr
+    else:
+        if is_label_list_field:
+            match_fcn = _get_list_field_only_matches_expr
+        else:
+            match_fcn = _get_field_only_matches_expr
+
+    return match_fcn(prefix + field)
 
 
 class _ViewStageRepr(reprlib.Repr):
@@ -3455,6 +3853,8 @@ _STAGES = [
     FilterDetections,
     FilterPolylines,
     FilterKeypoints,
+    GeoNear,
+    GeoWithin,
     Limit,
     LimitLabels,
     MapLabels,

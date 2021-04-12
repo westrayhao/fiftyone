@@ -64,10 +64,9 @@ def evaluate_segmentations(
         gt_field ("ground_truth"): the name of the field containing the ground
             truth :class:`fiftyone.core.labels.Segmentation` instances
         eval_key (None): an evaluation key to use to refer to this evaluation
-        mask_targets (None): a dict mapping mask values to labels. May contain
-            a subset of the possible classes if you wish to evaluate a subset
-            of the semantic classes. If not provided, mask targets are loaded
-            from :meth:`fiftyone.core.dataset.Dataset.mask_targets` or
+        mask_targets (None): a dict mapping mask values to labels. If not
+            provided, mask targets are loaded from
+            :meth:`fiftyone.core.dataset.Dataset.mask_targets` or
             :meth:`fiftyone.core.dataset.Dataset.default_mask_targets` if
             possible, or else the observed pixel values are used
         method ("simple"): a string specifying the evaluation method to use.
@@ -92,9 +91,13 @@ def evaluate_segmentations(
     config = _parse_config(config, pred_field, gt_field, method, **kwargs)
     eval_method = config.build()
     eval_method.register_run(samples, eval_key)
-    return eval_method.evaluate_samples(
+
+    results = eval_method.evaluate_samples(
         samples, eval_key=eval_key, mask_targets=mask_targets
     )
+    eval_method.save_run_results(samples, eval_key, results)
+
+    return results
 
 
 class SegmentationEvaluationConfig(foe.EvaluationMethodConfig):
@@ -174,8 +177,8 @@ class SimpleEvaluationConfig(SegmentationEvaluationConfig):
     Args:
         pred_field: the name of the field containing the predicted
             :class:`fiftyone.core.labels.Segmentation` instances
-        gt_field ("ground_truth"): the name of the field containing the ground
-            truth :class:`fiftyone.core.labels.Segmentation` instances
+        gt_field: the name of the field containing the ground truth
+            :class:`fiftyone.core.labels.Segmentation` instances
         bandwidth (None): an optional bandwidth along the contours of the
             ground truth masks to which to restrict attention when computing
             accuracies. A typical value for this parameter is 5 pixels. By
@@ -214,13 +217,10 @@ class SimpleEvaluation(SegmentationEvaluation):
             values = _get_mask_values(samples, pred_field, gt_field)
             classes = [str(v) for v in values]
 
+        iter_samples = samples.select_fields([gt_field, pred_field])
+
         pred_field, processing_frames = samples._handle_frame_field(pred_field)
         gt_field, _ = samples._handle_frame_field(gt_field)
-
-        if not processing_frames:
-            iter_samples = samples.select_fields([gt_field, pred_field])
-        else:
-            iter_samples = samples
 
         nc = len(values)
         confusion_matrix = np.zeros((nc, nc), dtype=int)
@@ -283,19 +283,74 @@ class SimpleEvaluation(SegmentationEvaluation):
                     sample.save()
 
         missing = classes[0] if values[0] == 0 else None
-        return SegmentationResults(confusion_matrix, classes, missing=missing)
+        return SegmentationResults(
+            confusion_matrix,
+            classes,
+            gt_field=gt_field,
+            pred_field=pred_field,
+            missing=missing,
+        )
 
 
 class SegmentationResults(ClassificationResults):
     """Class that stores the results of a segmentation evaluation.
 
     Args:
-        confusion_matrix: a pixel value confusion matrix
+        pixel_confusion_matrix: a pixel value confusion matrix
         classes: a list of class labels corresponding to the confusion matrix
+        gt_field (None): the name of the ground truth field
+        pred_field (None): the name of the predictions field
         missing (None): a missing (background) class
     """
 
-    def __init__(self, confusion_matrix, classes, missing=None):
+    def __init__(
+        self,
+        pixel_confusion_matrix,
+        classes,
+        gt_field=None,
+        pred_field=None,
+        missing=None,
+    ):
+        pixel_confusion_matrix = np.asarray(pixel_confusion_matrix)
+        ytrue, ypred, weights = self._parse_confusion_matrix(
+            pixel_confusion_matrix, classes
+        )
+
+        super().__init__(
+            ytrue,
+            ypred,
+            weights=weights,
+            gt_field=gt_field,
+            pred_field=pred_field,
+            classes=classes,
+            missing=missing,
+        )
+
+        self.pixel_confusion_matrix = pixel_confusion_matrix
+
+    def attributes(self):
+        return [
+            "cls",
+            "pixel_confusion_matrix",
+            "gt_field",
+            "pred_field",
+            "classes",
+            "missing",
+        ]
+
+    @classmethod
+    def _from_dict(cls, d, samples, **kwargs):
+        return cls(
+            d["pixel_confusion_matrix"],
+            d["classes"],
+            gt_field=d.get("gt_field", None),
+            pred_field=d.get("pred_field", None),
+            missing=d.get("missing", None),
+            **kwargs,
+        )
+
+    @staticmethod
+    def _parse_confusion_matrix(confusion_matrix, classes):
         ytrue = []
         ypred = []
         weights = []
@@ -308,14 +363,7 @@ class SegmentationResults(ClassificationResults):
                     ypred.append(classes[j])
                     weights.append(cij)
 
-        super().__init__(
-            ytrue,
-            ypred,
-            None,
-            weights=weights,
-            classes=classes,
-            missing=missing,
-        )
+        return ytrue, ypred, weights
 
 
 def _parse_config(config, pred_field, gt_field, method, **kwargs):

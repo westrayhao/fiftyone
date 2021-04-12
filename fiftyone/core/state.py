@@ -30,52 +30,47 @@ class StateDescription(etas.Serializable):
     a corresponding :class:`fiftyone.core.session.Session`.
 
     Args:
-        close (False): whether to close the App
-        connected (False): whether the session is connected to an App
+        datasets (None): the list of available datasets
         dataset (None): the current :class:`fiftyone.core.dataset.Dataset`
+        view (None): the current :class:`fiftyone.core.view.DatasetView`
+        filters (None): a dictionary of currently active App filters
+        connected (False): whether the session is connected to an App
+        active_handle (None): the UUID of the currently active App. Only
+            applicable in notebook contexts
         selected (None): the list of currently selected samples
         selected_labels (None): the list of currently selected labels
-        view (None): the current :class:`fiftyone.core.view.DatasetView`
         config (None): an optional :class:`fiftyone.core.config.AppConfig`
         refresh (False): a boolean toggle for forcing an App refresh
+        close (False): whether to close the App
     """
 
     def __init__(
         self,
-        active_handle=None,
-        close=False,
-        connected=False,
-        dataset=None,
         datasets=None,
+        dataset=None,
+        view=None,
+        filters=None,
+        connected=False,
+        active_handle=None,
         selected=None,
         selected_labels=None,
-        view=None,
-        filters={},
         config=None,
         refresh=False,
+        close=False,
     ):
-        self.config = config or fo.app_config.copy()
-        self.close = close
-        self.connect = connected
+        self.datasets = datasets or fod.list_datasets()
         self.dataset = dataset
         self.view = view
+        self.filters = filters or {}
+        self.connected = connected
+        self.active_handle = active_handle
         self.selected = selected or []
         self.selected_labels = selected_labels or []
-        self.filters = filters
-        self.datasets = datasets or fod.list_datasets()
-        self.active_handle = active_handle
+        self.config = config or fo.app_config.copy()
         self.refresh = refresh
-        super().__init__()
+        self.close = close
 
     def serialize(self, reflective=False):
-        """Serializes the state into a dictionary.
-
-        Args:
-            reflective: whether to include reflective attributes when
-                serializing the object. By default, this is False
-        Returns:
-            a JSON dictionary representation of the object
-        """
         with fou.disable_progress_bars():
             d = super().serialize(reflective=reflective)
             d["dataset"] = (
@@ -87,7 +82,6 @@ class StateDescription(etas.Serializable):
             return d
 
     def attributes(self):
-        """Returns list of attributes to be serialize"""
         return list(
             filter(
                 lambda a: a not in {"dataset", "view"}, super().attributes()
@@ -95,27 +89,18 @@ class StateDescription(etas.Serializable):
         )
 
     @classmethod
-    def from_dict(cls, d, with_config=None, **kwargs):
+    def from_dict(cls, d, with_config=None):
         """Constructs a :class:`StateDescription` from a JSON dictionary.
 
         Args:
             d: a JSON dictionary
-            with_config: an existing app config to attach and apply settings to
+            with_config (None): an existing
+                :class:`fiftyone.core.config.AppConfig` to attach and apply
+                settings to
 
         Returns:
             :class:`StateDescription`
         """
-        config = with_config or fo.app_config.copy()
-        foc._set_settings(config, d.get("config", {}))
-
-        active_handle = d.get("active_handle", None)
-        close = d.get("close", False)
-        connected = d.get("connected", False)
-        filters = d.get("filters", {})
-        selected = d.get("selected", [])
-        selected_labels = d.get("selected_labels", [])
-        refresh = d.get("refresh", False)
-
         dataset = d.get("dataset", None)
         if dataset is not None:
             dataset = fod.load_dataset(dataset.get("name"))
@@ -126,89 +111,177 @@ class StateDescription(etas.Serializable):
         else:
             view = None
 
+        filters = d.get("filters", {})
+        connected = d.get("connected", False)
+        active_handle = d.get("active_handle", None)
+        selected = d.get("selected", [])
+        selected_labels = d.get("selected_labels", [])
+
+        config = with_config or fo.app_config.copy()
+        foc._set_settings(config, d.get("config", {}))
+
+        close = d.get("close", False)
+        refresh = d.get("refresh", False)
+
         return cls(
-            active_handle=active_handle,
-            config=config,
-            close=close,
-            connected=connected,
             dataset=dataset,
-            selected=selected,
-            selected_labels=selected_labels,
             view=view,
             filters=filters,
+            connected=connected,
+            active_handle=active_handle,
+            selected=selected,
+            selected_labels=selected_labels,
+            config=config,
             refresh=refresh,
-            **kwargs
+            close=close,
         )
 
 
 class DatasetStatistics(object):
-    """Encapsulates the aggregation statistics required by the App's dataset
-    view.
+    """Class that encapsulates the aggregation statistics required by the App's
+    dataset view.
+
+    Args:
+        view: a :class:`fiftyone.core.view.DatasetView`
     """
 
     def __init__(self, view):
-        schemas = [("", view.get_field_schema())]
-        aggregations = [foa.Count()]
-        if view.media_type == fom.VIDEO:
+        aggs, exists_aggs = self._build(view)
+        self._aggregations = aggs
+        self._exists_aggregations = exists_aggs
+
+    @property
+    def aggregations(self):
+        """The list of :class:`fiftyone.core.aggregations.Aggregation`
+        instances to run to compute the stats for the view.
+        """
+        return self._aggregations
+
+    @property
+    def exists_aggregations(self):
+        """The list of :class:`fiftyone.core.aggregations.Aggregation`
+        instances that check whether fields exist.
+        """
+        return self._exists_aggregations
+
+    @classmethod
+    def fields(cls, collection):
+        """The list of custom fields on the provided
+        :class:`fiftyone.core.collections.SampleCollection`.
+
+        Args:
+            collection: a :class:`fiftyone.core.collections.SampleCollection`
+        
+        Returns:
+            a ``list`` of (path, field) ``tuple``s
+        """
+        schemas = [("", collection.get_field_schema())]
+        if collection.media_type == fom.VIDEO:
             schemas.append(
-                (view._FRAMES_PREFIX, view.get_frame_field_schema())
+                (
+                    collection._FRAMES_PREFIX,
+                    collection.get_frame_field_schema(),
+                )
             )
-            aggregations.extend([foa.Count("frames")])
 
         default_fields = fosa.get_default_sample_fields()
-        aggregations.append(foa.CountValues("tags"))
-        is_none = (~(fo.ViewField().exists())).if_else(True, None)
-        none_aggregations = []
+
+        result = []
         for prefix, schema in schemas:
             for field_name, field in schema.items():
                 if field_name in default_fields or (
-                    prefix == view._FRAMES_PREFIX
+                    prefix == collection._FRAMES_PREFIX
                     and field_name == "frame_number"
                 ):
                     continue
 
-                field_name = prefix + field_name
-                if _is_label(field):
-                    path = field_name
-                    if issubclass(field.document_type, fol._HasLabelList):
-                        path = "%s.%s" % (
-                            path,
-                            field.document_type._LABEL_LIST_FIELD,
-                        )
+                result.append((prefix + field_name, field))
 
-                    aggregations.append(foa.Count(path))
-                    label_path = "%s.label" % path
-                    confidence_path = "%s.confidence" % path
-                    aggregations.extend(
-                        [
-                            foa.Distinct(label_path),
-                            foa.Bounds(confidence_path),
-                        ]
-                    )
-                    none_aggregations.append(
-                        foa.Count(label_path, expr=is_none)
-                    )
-                    none_aggregations.append(
-                        foa.Count(confidence_path, expr=is_none)
-                    )
-                else:
-                    aggregations.append(foa.Count(field_name))
-                    aggregations.append(foa.Count(field_name))
-                    none_aggregations.append(
-                        foa.Count(field_name, expr=is_none)
-                    )
+        return result
 
-                    if _meets_type(field, (fof.IntField, fof.FloatField)):
-                        aggregations.append(foa.Bounds(field_name))
-                    elif _meets_type(field, fof.StringField):
-                        aggregations.append(foa.Distinct(field_name))
+    @classmethod
+    def labels(cls, collection):
+        """The list of label fields on the provided
+        :class:`fiftyone.core.collections.SampleCollection`.
 
-        self._aggregations = aggregations + none_aggregations
-        self._none_len = len(none_aggregations)
+        Args:
+            collection: a :class:`fiftyone.core.collections.SampleCollection`
 
-    @property
-    def aggregations(self):
-        return self._aggregations
+        Returns:
+            a ``list`` of (path, field) ``tuple``s
+        """
+        return [
+            (path, field)
+            for (path, field) in cls.fields(collection)
+            if _is_label(field)
+        ]
+
+    @classmethod
+    def get_label_aggregations(cls, collection):
+        labels = cls.labels(collection)
+        count_aggs = []
+        for path, field in labels:
+            path = _expand_labels_path(path, field)
+            count_aggs.append(foa.Count(path))
+
+        tag_aggs = []
+        for path, field in labels:
+            path = _expand_labels_path(path, field)
+            tag_aggs.append(foa.CountValues("%s.tags" % path))
+
+        return count_aggs, tag_aggs
+
+    def _build(self, view):
+        aggregations = [foa.Count()]
+        exists_aggregations = []
+
+        if view.media_type == fom.VIDEO:
+            aggregations.extend([foa.Count("frames")])
+
+        aggregations.append(foa.CountValues("tags"))
+
+        exists_expr = (~(fo.ViewField().exists())).if_else(True, None)
+
+        for field_name, field in self.fields(view):
+            if _is_label(field):
+                path = _expand_labels_path(field_name, field)
+
+                aggregations.append(foa.Count(path))
+                label_path = "%s.label" % path
+                confidence_path = "%s.confidence" % path
+                tags_path = "%s.tags" % path
+                aggregations.extend(
+                    [
+                        foa.Distinct(label_path),
+                        foa.Bounds(confidence_path),
+                        foa.CountValues(tags_path),
+                    ]
+                )
+                exists_aggregations.append(
+                    foa.Count(label_path, expr=exists_expr)
+                )
+                exists_aggregations.append(
+                    foa.Count(confidence_path, expr=exists_expr)
+                )
+            else:
+                aggregations.append(foa.Count(field_name))
+                exists_aggregations.append(
+                    foa.Count(field_name, expr=exists_expr)
+                )
+
+                if _meets_type(field, (fof.IntField, fof.FloatField)):
+                    aggregations.append(foa.Bounds(field_name))
+                elif _meets_type(field, fof.StringField):
+                    aggregations.append(foa.Distinct(field_name))
+
+        return aggregations, exists_aggregations
+
+
+def _expand_labels_path(root, label_field):
+    if issubclass(label_field.document_type, fol._HasLabelList):
+        return "%s.%s" % (root, label_field.document_type._LABEL_LIST_FIELD,)
+
+    return root
 
 
 def _meets_type(field, t):

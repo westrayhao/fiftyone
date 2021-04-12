@@ -77,7 +77,6 @@ obtain a desired subset of the samples.
     Media type:     None
     Num samples:    0
     Persistent:     False
-    Info:           {}
     Tags:           []
     Sample fields:
         media_type: fiftyone.core.fields.StringField
@@ -189,7 +188,6 @@ schema and thus accessible on all other samples in the dataset.
     Media type:     image
     Num samples:    1
     Persistent:     False
-    Info:           {}
     Tags:           []
     Sample fields:
         filepath:  fiftyone.core.fields.StringField
@@ -285,7 +283,7 @@ Labels
 Labels store semantic information about the sample, such as ground annotations
 or model predictions.
 
-FiftyOne provides a |Label| subclass for common tasks:
+FiftyOne provides a |Label| subclass for many common tasks:
 
 - :ref:`Classification <classification>`: a classification label
 - :ref:`Classifications <multilabel-classification>`: a list of classifications
@@ -295,6 +293,10 @@ FiftyOne provides a |Label| subclass for common tasks:
 - :ref:`Keypoints <keypoints>`: a list of keypoints in an image
 - :ref:`Segmentation <semantic-segmentation>`: a semantic segmentation mask for
   an image
+- :ref:`GeoLocation <geolocation>`: a single geolocation point, line, or
+  polygon
+- :ref:`GeoLocations <geolocation>`: a container of multiple geolocation
+  points, lines, and polygons
 
 Using FiftyOne's |Label| types enables you to visualize your labels in the
 :ref:`the App <fiftyone-app>`.

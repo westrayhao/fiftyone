@@ -17,12 +17,12 @@ class BdistWheelCustom(bdist_wheel):
         # make just the wheel require these packages, since they aren't needed
         # for a development installation
         self.distribution.install_requires += [
-            "fiftyone-brain>=0.4,<0.5",
+            "fiftyone-brain>=0.5,<0.6",
             "fiftyone-db>=0.2.1,<0.3",
         ]
 
 
-VERSION = "0.7.4"
+VERSION = "0.8.0.1"
 
 
 def get_version():
@@ -38,7 +38,7 @@ def get_version():
     return VERSION
 
 
-EXTRAS_REQUIREMENTS = {"desktop": ["fiftyone-desktop>=0.11.0,<0.12.0"]}
+EXTRAS_REQUIREMENTS = {"desktop": ["fiftyone-desktop>=0.12.0,<0.13.0"]}
 
 
 with open("README.md", "r") as fh:
@@ -72,12 +72,15 @@ setup(
         "eventlet",
         "future",
         "Jinja2",
+        "kaleido",
         "matplotlib",
         "mongoengine==0.20.0",
         "motor<3,>=2.3",
         "numpy",
         "packaging",
+        "pandas",
         "Pillow>=6.2",
+        "plotly>=4.14",
         "pprintpp",
         "psutil",
         "pymongo<4,>=3.11",
@@ -91,7 +94,7 @@ setup(
         "universal-analytics-python3>=1.0.1,<2",
         "validators>=0.18.2",
         # internal packages
-        "voxel51-eta>=0.3,<0.4",
+        "voxel51-eta>=0.4.1,<0.5",
         # ETA dependency - restricted to a maximum version known to provide
         # wheels here because it tends to publish sdists several hours before
         # wheels. When users install FiftyOne in this window, they will need to

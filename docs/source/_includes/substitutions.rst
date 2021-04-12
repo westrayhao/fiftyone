@@ -17,6 +17,8 @@
 .. |StringField| replace:: :class:`StringField <fiftyone.core.fields.StringField>`
 .. |ListField| replace:: :class:`ListField <fiftyone.core.fields.ListField>`
 .. |DictField| replace:: :class:`DictField <fiftyone.core.fields.DictField>`
+.. |VectorField| replace:: :class:`VectorField <fiftyone.core.fields.VectorField>`
+.. |ArrayField| replace:: :class:`ArrayField <fiftyone.core.fields.ArrayField>`
 
 .. |ViewExpression| replace:: :class:`ViewExpression <fiftyone.core.expressions.ViewExpression>`
 .. |ViewField| replace:: :class:`ViewField <fiftyone.core.expressions.ViewField>`
@@ -31,6 +33,8 @@
 .. |Keypoint| replace:: :class:`Keypoint <fiftyone.core.labels.Keypoint>`
 .. |Keypoints| replace:: :class:`Keypoints <fiftyone.core.labels.Keypoints>`
 .. |Segmentation| replace:: :class:`Segmentation <fiftyone.core.labels.Segmentation>`
+.. |GeoLocation| replace:: :class:`GeoLocation <fiftyone.core.labels.GeoLocation>`
+.. |GeoLocations| replace:: :class:`GeoLocations <fiftyone.core.labels.GeoLocations>`
 
 .. |Attribute| replace:: :class:`Attribute <fiftyone.core.labels.Attribute>`
 .. |BooleanAttribute| replace:: :class:`BooleanAttribute <fiftyone.core.labels.BooleanAttribute>`
@@ -82,10 +86,24 @@
 .. |EmbeddingsMixin| replace:: :class:`EmbeddingsMixin <fiftyone.core.models.EmbeddingsMixin>`
 .. |TorchModelMixin| replace:: :class:`TorchModelMixin <fiftyone.core.models.TorchModelMixin>`
 
-.. |EvaluationResults| replace:: :class:`EvaluationResults <fiftyone.utils.eval.base.EvaluationResults>`
+.. |EvaluationResults| replace:: :class:`EvaluationResults <fiftyone.core.evaluation.EvaluationResults>`
+.. |BrainResults| replace:: :class:`BrainResults <fiftyone.core.brain.BrainResults>`
+
 .. |ClassificationResults| replace:: :class:`ClassificationResults <fiftyone.utils.eval.classification.ClassificationResults>`
 .. |BinaryClassificationResults| replace:: :class:`BinaryClassificationResults <fiftyone.utils.eval.classification.BinaryClassificationResults>`
 .. |DetectionResults| replace:: :class:`DetectionResults <fiftyone.utils.eval.detection.DetectionResults>`
 .. |SegmentationResults| replace:: :class:`SegmentationResults <fiftyone.utils.eval.segmentation.SegmentationResults>`
-
 .. |COCOEvaluationConfig| replace:: :class:`COCOEvaluationConfig <fiftyone.utils.eval.coco.COCOEvaluationConfig>`
+
+.. |Plot| replace:: :class:`Plot <fiftyone.core.plots.base.Plot>`
+.. |ResponsivePlot| replace:: :class:`ResponsivePlot <fiftyone.core.plots.base.ResponsivePlot>`
+.. |ViewPlot| replace:: :class:`ViewPlot <fiftyone.core.plots.base.ViewPlot>`
+.. |InteractivePlot| replace:: :class:`InteractivePlot <fiftyone.core.plots.base.InteractivePlot>`
+.. |PlotManager| replace:: :class:`Plot <fiftyone.core.plots.manager.PlotManager>`
+
+.. |CategoricalHistogram| replace:: :class:`CategoricalHistogram <fiftyone.core.plots.views.CategoricalHistogram>`
+.. |NumericalHistogram| replace:: :class:`NumericalHistogram <fiftyone.core.plots.views.NumericalHistogram>`
+.. |ViewGrid| replace:: :class:`ViewGrid <fiftyone.core.plots.views.ViewGrid>`
+
+.. |InteractiveScatter| replace:: :class:`InteractiveScatter <fiftyone.core.plots.plotly.InteractiveScatter>`
+.. |InteractiveHeatmap| replace:: :class:`InteractiveHeatmap <fiftyone.core.plots.plotly.InteractiveHeatmap>`

@@ -1,9 +1,9 @@
-import React, { useContext, useState } from "react";
-import styled, { ThemeContext } from "styled-components";
+import React, { useState } from "react";
+import styled from "styled-components";
 import { animated, useSpring } from "react-spring";
-import { useRecoilValue } from "recoil";
 
-import * as selectors from "../recoil/selectors";
+import { port, isNotebook } from "../shared/connection";
+import { useTheme } from "../utils/hooks";
 
 const SectionTitle = styled.div`
   font-size: 2rem;
@@ -32,8 +32,7 @@ const Code = styled.pre`
   border-radius: 3px;
 `;
 
-const remoteSnippet = `
-import fiftyone as fo
+const remoteSnippet = `import fiftyone as fo
 
 # Load your FiftyOne dataset
 dataset = fo.load_dataset(...)
@@ -43,9 +42,7 @@ session = fo.launch_app(dataset, remote=True, port=XXXX)
 `;
 
 const LocalInstructions = () => {
-  const port = useRecoilValue(selectors.port);
-  const localSnippet = `
-import fiftyone as fo
+  const localSnippet = `import fiftyone as fo
 
 # Load your FiftyOne dataset
 dataset = fo.load_dataset(...)
@@ -63,17 +60,13 @@ session = fo.launch_app(dataset, port=${port})
 };
 
 const RemoteInstructions = () => {
-  const port = useRecoilValue(selectors.port);
-  const bashSnippet = `
-# Option 1
-# Use the CLI to connect to the remote session
-fiftyone app connect \\
-    --destination <username>@<remote-ip-address> \\
-    --port XXXX --local-port ${port}
+  const bashSnippet = `# Option 1: Configure port forwaring
+# Then open http://localhost:${port} in your web browser
+ssh -N -L ${port}:127.0.0.1:XXXX [<username>@]<hostname>
 
-# Option 2
-# Manually configure port forwarding
-ssh -N -L ${port}:127.0.0.1:XXXX <username>@<remote-ip-address>
+# Option 2: Use the CLI
+fiftyone app connect --destination [<username>@]<hostname> \\
+    --port XXXX --local-port ${port}
 `;
   return (
     <>
@@ -98,16 +91,6 @@ ssh -N -L ${port}:127.0.0.1:XXXX <username>@<remote-ip-address>
 };
 
 const NotebookInstructions = () => {
-  const port = useRecoilValue(selectors.port);
-  const notebookSnippet = `
-import fiftyone as fo
-
-# Load your FiftyOne dataset
-dataset = fo.load_dataset(...)
-
-# Launch the app
-session = fo.launch_app(dataset, port=${port})
-`;
   return (
     <>
       <SectionTitle>Notebook sessions</SectionTitle>
@@ -156,8 +139,7 @@ const Tab = animated(styled.div`
 `);
 
 function Setup() {
-  const isNotebook = useRecoilValue(selectors.isNotebook);
-  const theme = useContext(ThemeContext);
+  const theme = useTheme();
   const [activeTab, setActiveTab] = useState<string>("local");
   const localProps = useSpring({
     borderBottomColor: activeTab === "local" ? theme.brand : theme.background,
@@ -170,7 +152,7 @@ function Setup() {
 
   return (
     <SetupContainer>
-      <Title>Welcome to FiftyOne</Title>
+      <Title>Welcome to FiftyOne!</Title>
       <Subtitle>It looks like you are not connected to a session</Subtitle>
       {isNotebook ? (
         <NotebookInstructions />

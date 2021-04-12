@@ -155,12 +155,15 @@ format when reading the dataset from disk.
     | :ref:`BDDDataset <BDDDataset-import>`                                                 | A labeled dataset consisting of images and their associated multitask predictions  |
     |                                                                                       | saved in `Berkeley DeepDrive (BDD) format <https://bdd-data.berkeley.edu>`_.       |
     +---------------------------------------------------------------------------------------+------------------------------------------------------------------------------------+
+    | :ref:`GeoJSONImageDataset <GeoJSONImageDataset-import>`                               | An image dataset whose labels and location data are stored in                      |
+    |                                                                                       | `GeoJSON format <https://en.wikipedia.org/wiki/GeoJSON>`_.                         |
+    +---------------------------------------------------------------------------------------+------------------------------------------------------------------------------------+
     | :ref:`FiftyOneVideoLabelsDataset <FiftyOneVideoLabelsDataset-import>`                 | A labeled dataset consisting of videos and their associated multitask predictions  |
     |                                                                                       | stored in `ETA VideoLabels format \                                                |
     |                                                                                       | <https://github.com/voxel51/eta/blob/develop/docs/video_labels_guide.md>`_.        |
     +---------------------------------------------------------------------------------------+------------------------------------------------------------------------------------+
-    | :ref:`FiftyOneDataset <FiftyOneDataset-import>`                                       | A dataset consisting of an arbitrary serialized |Dataset| and its associated       |
-    |                                                                                       | data.                                                                              |
+    | :ref:`FiftyOneDataset <FiftyOneDataset-import>`                                       | A dataset consisting of an entire serialized |Dataset| and its associated source   |
+    |                                                                                       | media.                                                                             |
     +---------------------------------------------------------------------------------------+------------------------------------------------------------------------------------+
     | :ref:`Custom formats <custom-dataset-importer>`                                       | Import datasets in custom formats by defining your own |DatasetType| or            |
     |                                                                                       | |DatasetImporter| class.                                                           |
@@ -234,7 +237,7 @@ You can create a FiftyOne dataset from a directory of images as follows:
 
         DATASET_DIR=/path/to/images-dir
 
-        # View the dataset in the app
+        # View the dataset in the App
         fiftyone app view \
             --dataset-dir $DATASET_DIR \
             --type fiftyone.types.ImageDirectory
@@ -307,7 +310,7 @@ You can create a FiftyOne dataset from a directory of videos as follows:
 
         DATASET_DIR=/path/to/videos-dir
 
-        # View the dataset in the app
+        # View the dataset in the App
         fiftyone app view \
             --dataset-dir $DATASET_DIR \
             --type fiftyone.types.VideoDirectory
@@ -407,7 +410,7 @@ in the above format as follows:
 
         DATASET_DIR=/path/to/image-classification-dataset
 
-        # View the dataset in the app
+        # View the dataset in the App
         fiftyone app view \
             --dataset-dir $DATASET_DIR \
             --type fiftyone.types.FiftyOneImageClassificationDataset
@@ -490,7 +493,7 @@ stored in the above format as follows:
 
         DATASET_DIR=/path/to/image-classification-dir-tree
 
-        # View the dataset in the app
+        # View the dataset in the App
         fiftyone app view \
             --dataset-dir $DATASET_DIR \
             --type fiftyone.types.ImageClassificationDirectoryTree
@@ -573,7 +576,7 @@ stored in the above format as follows:
 
         DATASET_DIR=/path/to/video-classification-dir-tree
 
-        # View the dataset in the app
+        # View the dataset in the App
         fiftyone app view \
             --dataset-dir $DATASET_DIR \
             --type fiftyone.types.VideoClassificationDirectoryTree
@@ -684,7 +687,7 @@ as a directory of TFRecords in the above format as follows:
 
         DATASET_DIR=/path/to/tf-image-classification-dataset
 
-        # View the dataset in the app
+        # View the dataset in the App
         fiftyone app view \
             --dataset-dir $DATASET_DIR \
             --type fiftyone.types.TFImageClassificationDataset
@@ -803,7 +806,7 @@ above format as follows:
 
         DATASET_DIR=/path/to/image-detection-dataset
 
-        # View the dataset in the app
+        # View the dataset in the App
         fiftyone app view \
             --dataset-dir $DATASET_DIR \
             --type fiftyone.types.FiftyOneImageDetectionDataset
@@ -934,7 +937,7 @@ above format as follows:
 
         DATASET_DIR=/path/to/coco-detection-dataset
 
-        # View the dataset in the app
+        # View the dataset in the App
         fiftyone app view \
             --dataset-dir $DATASET_DIR \
             --type fiftyone.types.COCODetectionDataset
@@ -1063,7 +1066,7 @@ above format as follows:
 
         DATASET_DIR=/path/to/voc-detection-dataset
 
-        # View the dataset in the app
+        # View the dataset in the App
         fiftyone app view \
             --dataset-dir $DATASET_DIR \
             --type fiftyone.types.VOCDetectionDataset
@@ -1185,7 +1188,7 @@ above format as follows:
 
         DATASET_DIR=/path/to/kitti-detection-dataset
 
-        # View the dataset in the app
+        # View the dataset in the App
         fiftyone app view \
             --dataset-dir $DATASET_DIR \
             --type fiftyone.types.KITTIDetectionDataset
@@ -1296,7 +1299,7 @@ format as follows:
 
         DATASET_DIR=/path/to/yolo-dataset
 
-        # View the dataset in the app
+        # View the dataset in the App
         fiftyone app view \
             --dataset-dir $DATASET_DIR \
             --type fiftyone.types.YOLODataset
@@ -1427,7 +1430,7 @@ directory of TFRecords in the above format as follows:
 
         DATASET_DIR=/path/to/tf-object-detection-dataset
 
-        # View the dataset in the app
+        # View the dataset in the App
         fiftyone app view \
             --dataset-dir $DATASET_DIR \
             --type fiftyone.types.TFObjectDetectionDataset
@@ -1555,7 +1558,7 @@ format as follows:
 
         DATASET_DIR=/path/to/cvat-image-dataset
 
-        # View the dataset in the app
+        # View the dataset in the App
         fiftyone app view \
             --dataset-dir $DATASET_DIR \
             --type fiftyone.types.CVATImageDataset
@@ -1715,7 +1718,7 @@ format as follows:
 
         DATASET_DIR=/path/to/cvat-video-dataset
 
-        # View the dataset in the app
+        # View the dataset in the App
         fiftyone app view \
             --dataset-dir $DATASET_DIR \
             --type fiftyone.types.CVATVideoDataset
@@ -1822,7 +1825,7 @@ above format as follows:
 
         DATASET_DIR=/path/to/image-labels-dataset
 
-        # View the dataset in the app
+        # View the dataset in the App
         fiftyone app view \
             --dataset-dir $DATASET_DIR \
             --type fiftyone.types.FiftyOneImageLabelsDataset
@@ -1929,7 +1932,7 @@ above format as follows:
 
         DATASET_DIR=/path/to/video-labels-dataset
 
-        # View the dataset in the app
+        # View the dataset in the App
         fiftyone app view \
             --dataset-dir $DATASET_DIR \
             --type fiftyone.types.FiftyOneVideoLabelsDataset
@@ -2087,10 +2090,141 @@ as follows:
 
         DATASET_DIR=/path/to/bdd-dataset
 
-        # View the dataset in the app
+        # View the dataset in the App
         fiftyone app view \
             --dataset-dir $DATASET_DIR \
             --type fiftyone.types.BDDDataset
+
+.. _GeoJSONImageDataset-import:
+
+GeoJSONImageDataset
+-------------------
+
+The :class:`fiftyone.types.GeoJSONImageDataset <fiftyone.types.dataset_types.GeoJSONImageDataset>`
+type represents a dataset consisting of images and their associated
+geolocation data and optional properties stored in
+`GeoJSON format <https://en.wikipedia.org/wiki/GeoJSON>`_.
+
+Datasets of this type are read in the following format:
+
+.. code-block:: text
+
+    <dataset_dir>/
+        data/
+            <filename1>.<ext>
+            <filename2>.<ext>
+            ...
+        labels.json
+
+where ``labels.json`` is a GeoJSON file containing a ``FeatureCollection`` in
+the following format:
+
+.. code-block:: text
+
+    {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [
+                        -73.99496451958454,
+                        40.66338032487842
+                    ]
+                },
+                "properties": {
+                    "filename": <filename1>.<ext>,
+                    ...
+                }
+            },
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [
+                        -73.80992143421788,
+                        40.65611832778962
+                    ]
+                },
+                "properties": {
+                    "filename": <filename2>.<ext>,
+                    ...
+                }
+            },
+            ...
+        ]
+    }
+
+where the ``geometry`` field may contain any valid GeoJSON geometry object, and
+the ``filename`` property encodes the name of the corresponding image in the
+``data/`` folder.
+
+You can also specify a ``filepath`` property rather than ``filename``, in which
+case the path is interpreted as an absolute path to the corresponding image,
+which may or may not be in ``data/`` folder.
+
+Images with no location data will have a null ``geometry`` field.
+
+The ``properties`` field of each feature can contain additional labels that
+can be imported when working with datasets of this type.
+
+You can create a FiftyOne dataset from a GeoJSON image dataset stored in the
+above format as follows:
+
+.. tabs::
+
+  .. group-tab:: Python
+
+    .. code-block:: python
+        :linenos:
+
+        import fiftyone as fo
+
+        name = "my-geojson-image-dataset"
+        dataset_dir = "/path/to/geojson-image-dataset"
+
+        # Create the dataset
+        dataset = fo.Dataset.from_dir(
+            dataset_dir, fo.types.GeoJSONImageDataset, name=name
+        )
+
+        # View summary info about the dataset
+        print(dataset)
+
+        # Print the first few samples in the dataset
+        print(dataset.head())
+
+  .. group-tab:: CLI
+
+    .. code-block:: shell
+
+        NAME=my-geojson-image-dataset
+        DATASET_DIR=/path/to/geojson-image-dataset
+
+        # Create the dataset
+        fiftyone datasets create \
+            --name $NAME \
+            --dataset-dir $DATASET_DIR \
+            --type fiftyone.types.GeoJSONImageDataset
+
+        # View summary info about the dataset
+        fiftyone datasets info $NAME
+
+        # Print the first few samples in the dataset
+        fiftyone datasets head $NAME
+
+    To view a GeoJSON image dataset stored in the above format in the FiftyOne
+    App without creating a persistent FiftyOne dataset, you can execute:
+
+    .. code-block:: shell
+
+        DATASET_DIR=/path/to/geojson-image-dataset
+
+        # View the dataset in the App
+        fiftyone app view \
+            --dataset-dir $DATASET_DIR \
+            --type fiftyone.types.GeoJSONImageDataset
 
 .. _FiftyOneDataset-import:
 
@@ -2098,44 +2232,37 @@ FiftyOneDataset
 ---------------
 
 The :class:`fiftyone.types.FiftyOneDataset <fiftyone.types.dataset_types.FiftyOneDataset>`
-provides a disk representation of a |Dataset|, including its |Sample| instances
-stored in a serialized JSON format, and the associated source data.
+provides a disk representation of an entire |Dataset| in a serialized JSON
+format along with its source media.
 
-Non-video datasets of this type are read in the following format:
-
-.. code-block:: text
-
-    <dataset_dir>/
-        data/
-            <filename1>.<ext>
-            <filename2>.<ext>
-            ...
-        metadata.json
-        samples.json
-
-where `metadata.json` is an optional JSON file containing metadata associated
-with the dataset, and `samples.json` is a JSON file containing a serialized
-representation of the samples in the dataset generated by
-:meth:`Sample.to_dict() <fiftyone.core.sample.Sample.to_dict>`.
-
-Video datasets of this type are read in the following format:
+Datasets of this type are read in the following format:
 
 .. code-block:: text
 
     <dataset_dir>/
+        metadata.json
+        samples.json
         data/
             <filename1>.<ext>
             <filename2>.<ext>
             ...
-        frames/
-            <filename1>.json
-            <filename2>.json
+        evaluations/
+            <eval_key1>.json
+            <eval_key2>.json
             ...
-        metadata.json
-        samples.json
+        brain/
+            <brain_key1>.json
+            <brain_key2>.json
+            ...
 
-where the additional `frames/` directory contains a serialized representation
-of the frame labels for each video in the dataset.
+where `metadata.json` is a JSON file containing metadata associated with the
+dataset, `samples.json` is a JSON file containing a serialized representation
+of the samples in the dataset, `evaluations/` contains any serialized
+|EvaluationResults| for the dataset, and `brain/` contains any serialized
+|BrainResults| for the dataset.
+
+Video datasets have an additional `frames.json` file that contains a serialized
+representation of the frame labels for each video in the dataset.
 
 You can create a FiftyOne dataset from a directory in the above format as
 follows:
@@ -2187,7 +2314,7 @@ follows:
 
         DATASET_DIR=/path/to/fiftyone-dataset
 
-        # View the dataset in the app
+        # View the dataset in the App
         fiftyone app view \
             --dataset-dir $DATASET_DIR \
             --type fiftyone.types.FiftyOneDataset
@@ -2401,7 +2528,8 @@ should implement is determined by the type of dataset that you are importing.
                 )
 
             if importer.has_dataset_info:
-                dataset.info.update(importer.get_dataset_info())
+                info = importer.get_dataset_info()
+                parse_info(dataset, info)
 
     Note that the importer is invoked via its context manager interface, which
     automatically calls the
@@ -2418,10 +2546,9 @@ should implement is determined by the type of dataset that you are importing.
     :meth:`has_dataset_info <fiftyone.utils.data.importers.UnlabeledImageDatasetImporter.has_dataset_info>`
     property of the importer allows it to declare whether its
     :meth:`get_dataset_info() <fiftyone.utils.data.importers.UnlabeledImageDatasetImporter.get_dataset_info>`
-    method should be called after all samples have been imported to retrieve a
-    dictionary of information to store in the
-    :meth:`info <fiftyone.core.dataset.Dataset.info>` property of the FiftyOne
-    dataset.
+    method should be called after all samples have been imported to retrieve
+    dataset-level information to store on the FiftyOne dataset. See
+    :ref:`this section <importing-dataset-level-info>` for more information.
 
     The
     :meth:`has_image_metadata <fiftyone.utils.data.importers.UnlabeledImageDatasetImporter.has_image_metadata>`
@@ -2599,7 +2726,8 @@ should implement is determined by the type of dataset that you are importing.
                 dataset.add_sample(sample)
 
             if importer.has_dataset_info:
-                dataset.info.update(importer.get_dataset_info())
+                info = importer.get_dataset_info()
+                parse_info(dataset, info)
 
     Note that the importer is invoked via its context manager interface, which
     automatically calls the
@@ -2617,10 +2745,9 @@ should implement is determined by the type of dataset that you are importing.
     :meth:`has_dataset_info <fiftyone.utils.data.importers.LabeledImageDatasetImporter.has_dataset_info>`
     property of the importer allows it to declare whether its
     :meth:`get_dataset_info() <fiftyone.utils.data.importers.LabeledImageDatasetImporter.get_dataset_info>`
-    method should be called after all samples have been imported to retrieve a
-    dictionary of information to store in the
-    :meth:`info <fiftyone.core.dataset.Dataset.info>` property of the FiftyOne
-    dataset.
+    method should be called after all samples have been imported to retrieve
+    dataset-level information to store on the FiftyOne dataset. See
+    :ref:`this section <importing-dataset-level-info>` for more information.
 
     The
     :meth:`label_cls <fiftyone.utils.data.importers.LabeledImageDatasetImporter.label_cls>`
@@ -2760,7 +2887,8 @@ should implement is determined by the type of dataset that you are importing.
                 )
 
             if importer.has_dataset_info:
-                dataset.info.update(importer.get_dataset_info())
+                info = importer.get_dataset_info()
+                parse_info(dataset, info)
 
     Note that the importer is invoked via its context manager interface, which
     automatically calls the
@@ -2777,10 +2905,9 @@ should implement is determined by the type of dataset that you are importing.
     :meth:`has_dataset_info <fiftyone.utils.data.importers.UnlabeledVideoDatasetImporter.has_dataset_info>`
     property of the importer allows it to declare whether its
     :meth:`get_dataset_info() <fiftyone.utils.data.importers.UnlabeledVideoDatasetImporter.get_dataset_info>`
-    method should be called after all samples have been imported to retrieve a
-    dictionary of information to store in the
-    :meth:`info <fiftyone.core.dataset.Dataset.info>` property of the FiftyOne
-    dataset.
+    method should be called after all samples have been imported to retrieve
+    dataset-level information to store on the FiftyOne dataset. See
+    :ref:`this section <importing-dataset-level-info>` for more information.
 
     The
     :meth:`has_video_metadata <fiftyone.utils.data.importers.UnlabeledVideoDatasetImporter.has_video_metadata>`
@@ -3000,7 +3127,8 @@ should implement is determined by the type of dataset that you are importing.
                 dataset.add_sample(sample)
 
             if importer.has_dataset_info:
-                dataset.info.update(importer.get_dataset_info())
+                info = importer.get_dataset_info()
+                parse_info(dataset, info)
 
     Note that the importer is invoked via its context manager interface, which
     automatically calls the
@@ -3022,10 +3150,9 @@ should implement is determined by the type of dataset that you are importing.
     :meth:`has_dataset_info <fiftyone.utils.data.importers.LabeledVideoDatasetImporter.has_dataset_info>`
     property of the importer allows it to declare whether its
     :meth:`get_dataset_info() <fiftyone.utils.data.importers.LabeledVideoDatasetImporter.get_dataset_info>`
-    method should be called after all samples have been imported to retrieve a
-    dictionary of information to store in the
-    :meth:`info <fiftyone.core.dataset.Dataset.info>` property of the FiftyOne
-    dataset.
+    method should be called after all samples have been imported to retrieve
+    dataset-level information to store on the FiftyOne dataset. See
+    :ref:`this section <importing-dataset-level-info>` for more information.
 
     The
     :meth:`label_cls <fiftyone.utils.data.importers.LabeledVideoDatasetImporter.label_cls>`
@@ -3041,6 +3168,62 @@ should implement is determined by the type of dataset that you are importing.
     |VideoMetadata| instances for each video that it loads when
     :meth:`__next__() <fiftyone.utils.data.importers.LabeledVideoDatasetImporter.__next__>`
     is called.
+
+.. _importing-dataset-level-info:
+
+Importing dataset-level information
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The
+:meth:`has_dataset_info <fiftyone.utils.data.importers.DatasetImporter.has_dataset_info>`
+property of the importer allows it to declare whether its
+:meth:`get_dataset_info() <fiftyone.utils.data.importers.DatasetImporter.get_dataset_info>`
+method should be called after all samples have been imported to retrieve
+dataset-level information to store in the relevant properties of the FiftyOne
+dataset, including
+:meth:`info <fiftyone.core.dataset.Dataset.info>`,
+:meth:`classes <fiftyone.core.dataset.Dataset.classes>`,
+:meth:`default_classes <fiftyone.core.dataset.Dataset.default_classes>`,
+:meth:`mask_targets <fiftyone.core.dataset.Dataset.mask_targets>`, and
+:meth:`default_mask_targets <fiftyone.core.dataset.Dataset.default_mask_targets>`.
+
+The function below describes how the ``info`` dict is dissected by the dataset
+import routine:
+
+.. code-block:: python
+
+    def parse_info(dataset, info):
+        """Parses the info returned by :meth:`DatasetImporter.get_dataset_info` and
+        stores it on the relevant properties of the dataset.
+
+        Args:
+            dataset: a :class:`fiftyone.core.dataset.Dataset`
+            info: an info dict
+        """
+        classes = info.pop("classes", None)
+        if isinstance(classes, dict):
+            # Classes may already exist, so update rather than set
+            dataset.classes.update(classes)
+        elif isinstance(classes, list):
+            dataset.default_classes = classes
+
+        default_classes = info.pop("default_classes", None)
+        if default_classes:
+            dataset.default_classes = default_classes
+
+        mask_targets = info.pop("mask_targets", None)
+        if mask_targets:
+            # Mask targets may already exist, so update rather than set
+            dataset.mask_targets.update(dataset._parse_mask_targets(mask_targets))
+
+        default_mask_targets = info.pop("default_mask_targets", None)
+        if default_mask_targets:
+            dataset.default_mask_targets = dataset._parse_default_mask_targets(
+                default_mask_targets
+            )
+
+        dataset.info.update(info)
+        dataset.save()
 
 .. _writing-a-custom-dataset-type-importer:
 

@@ -2,16 +2,17 @@ import React, { useState } from "react";
 import { useRecoilCallback, useRecoilValue, useSetRecoilState } from "recoil";
 import styled from "styled-components";
 import { animated, useSpring, useTransition } from "react-spring";
+import { Checkbox } from "@material-ui/core";
 
+import { labelFilters } from "./Filters/LabelFieldFilters.state";
+import * as labelAtoms from "./Filters/utils";
 import Player51 from "./Player51";
 import Tag from "./Tags/Tag";
 import * as atoms from "../recoil/atoms";
 import * as selectors from "../recoil/selectors";
-import { labelFilters } from "./Filters/LabelFieldFilters.state";
-import * as labelAtoms from "./Filters/utils";
+import socket, { http } from "../shared/connection";
 import { packageMessage } from "../utils/socket";
 import { useVideoData, useTheme } from "../utils/hooks";
-import { Checkbox } from "@material-ui/core";
 import {
   stringify,
   VALID_CLASS_TYPES,
@@ -27,11 +28,11 @@ const SampleDiv = animated(styled.div`
 `);
 
 const SampleInfoDiv = animated(styled.div`
-  height: 36px;
-  display: flex;
   position: absolute;
   bottom: 0;
   padding: 0.5rem;
+  max-height: 100%;
+  overflow-y: auto;
   &::-webkit-scrollbar {
     width: 0px;
     background: transparent;
@@ -42,9 +43,8 @@ const SampleInfoDiv = animated(styled.div`
     display: none;
   }
   scrollbar-width: none;
-  overflow-x: scroll;
   width: 100%;
-  z-index: 499;
+  z-index: 498;
   pointer-events: none;
 `);
 
@@ -64,42 +64,40 @@ const LoadingBar = animated(styled.div`
   height: 0.2em;
 `);
 
-const useHoverLoad = (socket, sample) => {
-  if (sample._media_type !== "video") {
-    return [[], (e) => {}, (e) => {}];
-  }
+const useHoverLoad = (socket, id) => {
   const [barItem, setBarItem] = useState([]);
   const [loaded, setLoaded] = useState(null);
-  const viewCounter = useRecoilValue(atoms.viewCounter);
 
-  const [requested, requestLabels] = useVideoData(
-    socket,
-    sample,
-    (data, player) => {
-      if (!data) return;
-      const { labels } = data;
-      setLoaded(viewCounter);
-      setBarItem([]);
-      player.updateOverlay(labels);
-      if (player.isHovering()) player.play();
-    }
+  const requestLabels = useVideoData(socket, id, (data, player) => {
+    if (!data) return;
+    const { labels, counter } = data;
+    setLoaded(counter);
+    setBarItem([]);
+    player.updateOverlay(labels);
+    if (player.isHovering()) player.play();
+  });
+
+  const onMouseEnter = useRecoilCallback(
+    ({ snapshot }) => async (e) => {
+      const isVideo = await snapshot.getPromise(selectors.isVideoDataset);
+      const counter = await snapshot.getPromise(atoms.viewCounter);
+      if (!isVideo) return;
+      e.preventDefault();
+      const {
+        data: { player },
+      } = e;
+      if (loaded === counter) {
+        barItem.length && setBarItem([]);
+        player.play();
+        return;
+      }
+      setBarItem([0]);
+      requestLabels(player);
+    },
+    [barItem, loaded]
   );
 
-  const onMouseEnter = (event) => {
-    event.preventDefault();
-    const {
-      data: { player },
-    } = event;
-    if (loaded === viewCounter) {
-      barItem.length && setBarItem([]);
-      player.play();
-      return;
-    }
-    setBarItem([0]);
-    requestLabels(player);
-  };
-
-  const onMouseLeave = () => setBarItem([]);
+  const onMouseLeave = () => barItem.length && setBarItem([]);
 
   const bar = useTransition(barItem, (item) => item, {
     from: { right: "100%" },
@@ -126,13 +124,14 @@ const revealSample = () => {
   });
 };
 
-const SampleInfo = ({ sample }) => {
+const SampleInfo = React.memo(({ id }) => {
   const activeFields = useRecoilValue(labelAtoms.activeFields(false));
   const colorMap = useRecoilValue(selectors.colorMap(false));
   const scalars = useRecoilValue(selectors.scalarNames("sample"));
   const colorByLabel = useRecoilValue(atoms.colorByLabel(false));
   const labelTypes = useRecoilValue(selectors.labelTypesMap);
-  const theme = useTheme();
+  const sample = useRecoilValue(atoms.sample(id));
+
   const bubbles = activeFields.reduce((acc, cur) => {
     if (
       cur.startsWith("tags.") &&
@@ -145,11 +144,26 @@ const SampleInfo = ({ sample }) => {
         <Tag
           key={cur}
           name={tag}
-          color={colorMap[tag]}
+          color={colorMap[cur]}
           title={tag}
           maxWidth={"calc(100% - 32px)"}
         />,
       ];
+    } else if (cur.startsWith("_label_tags.")) {
+      const tag = cur.slice("_label_tags.".length);
+      const count = sample._label_tags[tag] || 0;
+      if (count > 0) {
+        acc = [
+          ...acc,
+          <Tag
+            key={cur}
+            name={`${tag}: ${count}`}
+            color={colorMap[cur]}
+            title={`${tag}: ${count}`}
+            maxWidth={"calc(100% - 32px)"}
+          />,
+        ];
+      }
     } else if (
       scalars.includes(cur) &&
       ![null, undefined].includes(sample[cur])
@@ -167,8 +181,11 @@ const SampleInfo = ({ sample }) => {
       ];
     } else if (VALID_CLASS_TYPES.includes(labelTypes[cur])) {
       const labelType = labelTypes[cur];
+
       const values = VALID_LIST_TYPES.includes(labelType)
-        ? sample[cur].classifications
+        ? sample[cur] && sample[cur].classifications
+          ? sample[cur].classifications
+          : []
         : sample[cur]
         ? [sample[cur]]
         : [];
@@ -189,16 +206,9 @@ const SampleInfo = ({ sample }) => {
     }
     return acc;
   }, []);
-  const props = useSpring({
-    background: `linear-gradient(
-      0deg,
-      ${bubbles.length ? theme.backgroundDark : "rgba(0, 0, 0, 0)"} 0%,
-      rgba(0, 0, 0, 0) 100%
-    )`,
-  });
 
-  return <SampleInfoDiv style={props}>{bubbles}</SampleInfoDiv>;
-};
+  return <SampleInfoDiv>{bubbles}</SampleInfoDiv>;
+});
 
 const SelectorDiv = animated(styled.div`
   position: absolute;
@@ -219,18 +229,19 @@ const argMin = (array) => {
   return [].reduce.call(array, (m, c, i, arr) => (c < arr[m] ? i : m), 0);
 };
 
-const useSelect = (id: string, index: number) => {
+const useSelect = (id: string) => {
   return useRecoilCallback(
-    ({ snapshot, set }) => async (e: {
+    ({ snapshot, set, reset }) => async (e: {
       ctrlKey: boolean;
       preventDefault: () => void;
     }) => {
       e.preventDefault();
-      const [socket, selectedSamples, stateDescription] = await Promise.all([
-        snapshot.getPromise(selectors.socket),
+      const [selectedSamples, stateDescription, indices] = await Promise.all([
         snapshot.getPromise(atoms.selectedSamples),
         snapshot.getPromise(atoms.stateDescription),
+        snapshot.getPromise(selectors.sampleIndices),
       ]);
+      const index = indices[id];
       const newSelected = new Set<string>(selectedSamples);
       const setOne = () => {
         if (newSelected.has(id)) {
@@ -239,7 +250,7 @@ const useSelect = (id: string, index: number) => {
           newSelected.add(id);
         }
       };
-      const ind = await snapshot.getPromise(selectors.selectedSampleIndices);
+      const ind = await snapshot.getPromise(selectors.sampleIndices);
       const rev = Object.fromEntries(
         Object.entries(ind).map((i) => [i[1], i[0]])
       );
@@ -250,37 +261,36 @@ const useSelect = (id: string, index: number) => {
         const best = entries[argMin(entries.map((e) => e[2]))][1];
 
         const [start, end] = best > index ? [index, best] : [best, index];
-        console.log(rev);
         for (let idx = start; idx <= end; idx++) {
           newSelected.add(rev[idx]);
         }
       } else {
         setOne();
       }
+      selectedSamples.forEach(
+        (s) => !newSelected.has(s) && reset(atoms.isSelectedSample(s))
+      );
+      newSelected.forEach(
+        (s) => !selectedSamples.has(s) && set(atoms.isSelectedSample(s), true)
+      );
       set(atoms.selectedSamples, newSelected);
-      socket.send(packageMessage("set_selection", { _ids: newSelected }));
+      socket.send(
+        packageMessage("set_selection", { _ids: Array.from(newSelected) })
+      );
       set(atoms.stateDescription, {
         ...stateDescription,
         selected: [...newSelected],
       });
-    }
+    },
+    [id]
   );
 };
 
-const Selector = ({
-  id,
-  spring,
-  index,
-}: {
-  id: string;
-  spring: any;
-  index: number;
-}) => {
+const Selector = React.memo(({ id, spring }: { id: string; spring: any }) => {
   const theme = useTheme();
+  const isSelected = useRecoilValue(atoms.isSelectedSample(id));
 
-  const selectedSamples = useRecoilValue(atoms.selectedSamples);
-
-  const handleClick = useSelect(id, index);
+  const handleClick = useSelect(id);
   return (
     <SelectorDiv
       style={{ ...spring }}
@@ -288,34 +298,43 @@ const Selector = ({
       title={"Click to select sample, Ctrl+Click to select a range"}
     >
       <Checkbox
-        checked={selectedSamples.has(id)}
+        checked={isSelected}
         style={{
           color: theme.brand,
         }}
-        title={"Click to select sample"}
+        title={"Click to select sample, Ctrl+Click to select a range"}
       />
     </SelectorDiv>
   );
-};
+});
 
-const Sample = ({ sample, metadata, index }) => {
-  const http = useRecoilValue(selectors.http);
+const Sample = ({ id }) => {
   const setModal = useSetRecoilState(atoms.modal);
-  const id = sample._id;
-  const src = useRecoilValue(
-    selectors.sampleUrl({ filepath: sample.filepath, id: sample.id })
-  );
+  const src = useRecoilValue(selectors.sampleUrl(id));
   const socket = useRecoilValue(selectors.socket);
   const colorByLabel = useRecoilValue(atoms.colorByLabel(false));
   const [hovering, setHovering] = useState(false);
-  const selectedSamples = useRecoilValue(atoms.selectedSamples);
+  const isSelected = useRecoilValue(atoms.isSelectedSample(id));
 
-  const [bar, onMouseEnter, onMouseLeave] = useHoverLoad(socket, sample);
+  const [bar, onMouseEnter, onMouseLeave] = useHoverLoad(socket, sample._id);
   const selectorSpring = useSpring({
-    opacity: hovering || selectedSamples.has(id) ? 1 : 0,
+    opacity: hovering || isSelected ? 1 : 0,
   });
 
-  const selectSample = useSelect(id, index);
+  const selectSample = useSelect(id);
+
+  const onClick = useRecoilCallback(
+    ({ snapshot }) => async (e) => {
+      const hasSelected = (await snapshot.getPromise(atoms.selectedSamples))
+        .size;
+      if (hasSelected) {
+        selectSample(e);
+      } else {
+        setModal({ visible: true, sample_id: id });
+      }
+    },
+    [id]
+  );
 
   return (
     <SampleDiv className="sample" style={revealSample()}>
@@ -328,8 +347,8 @@ const Sample = ({ sample, metadata, index }) => {
         onMouseEnter={() => setHovering(true)}
         onMouseLeave={() => setHovering(false)}
       >
-        <Selector key={id} id={id} spring={selectorSpring} index={index} />
-        <SampleInfo sample={sample} />
+        <Selector key={id} id={id} spring={selectorSpring} />
+        <SampleInfo id={id} />
         <Player51
           src={src}
           style={{
@@ -338,19 +357,14 @@ const Sample = ({ sample, metadata, index }) => {
             position: "absolute",
             cursor: "pointer",
           }}
-          sample={sample}
-          metadata={metadata}
+          id={id}
           thumbnail={true}
           activeLabelsAtom={labelAtoms.activeFields(false)}
           colorByLabel={colorByLabel}
           filterSelector={labelFilters(false)}
           onMouseEnter={onMouseEnter}
           onMouseLeave={onMouseLeave}
-          onClick={(e) =>
-            selectedSamples.size
-              ? selectSample(e)
-              : setModal({ visible: true, sample, metadata })
-          }
+          onClick={onClick}
         />
         {bar.map(({ key, props }) => (
           <LoadingBar key={key} style={props} />

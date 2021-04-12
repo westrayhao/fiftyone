@@ -18,8 +18,15 @@ import fiftyone as fo
 import fiftyone.constants as focn
 import fiftyone.core.dataset as fod
 import fiftyone.core.client as foc
+from fiftyone.core.config import AppConfig
 import fiftyone.core.context as focx
+import fiftyone.core.frame as fof
+import fiftyone.core.media as fom
+import fiftyone.core.plots as fop
+import fiftyone.core.sample as fosa
 import fiftyone.core.service as fos
+import fiftyone.core.utils as fou
+import fiftyone.core.view as fov
 import fiftyone.utils.templates as fout
 from fiftyone.core.state import StateDescription
 
@@ -58,16 +65,16 @@ Session launched. Run `session.show()` to open the App in a cell output.
 
 _REMOTE_INSTRUCTIONS = """
 You have launched a remote App on port {0}. To connect to this App from another
-machine, issue the following command:
-
-fiftyone app connect --destination [<username>@]<hostname> --port {0}
-
-where `[<username>@]<hostname>` refers to your current machine. Alternatively,
-you can manually configure port forwarding on another machine as follows:
+machine, issue the following command to configure port forwarding:
 
 ssh -N -L 5151:127.0.0.1:{0} [<username>@]<hostname>
 
-The App can then be viewed in your browser at http://localhost:5151.
+where `[<username>@]<hostname>` refers to your current machine. The App can
+then be viewed in your browser at http://localhost:5151.
+
+Alternatively, if you have FiftyOne installed on your local machine, just run:
+
+fiftyone app connect --destination [<username>@]<hostname> --port {0}
 
 See https://voxel51.com/docs/fiftyone/user_guide/app.html#remote-sessions
 for more information about remote sessions.
@@ -86,6 +93,7 @@ def launch_app(
     port=None,
     remote=False,
     desktop=None,
+    height=None,
     auto=True,
     config=None,
 ):
@@ -106,6 +114,8 @@ def launch_app(
         desktop (None): whether to launch the App in the browser (False) or as
             a desktop App (True). If None, ``fiftyone.config.desktop_app`` is
             used. Not applicable to notebook contexts
+        height (None): an optional height, in pixels, at which to render App
+            instances in notebook cells. Only applicable in notebook contexts
         auto (True): whether to automatically show a new App window
             whenever the state of the session is updated. Only applicable
             in notebook contexts
@@ -134,6 +144,7 @@ def launch_app(
         port=port,
         remote=remote,
         desktop=desktop,
+        height=height,
         auto=auto,
         config=config,
     )
@@ -167,8 +178,6 @@ def _update_state(auto_show=False):
         @wraps(func)
         def wrapper(self, *args, **kwargs):
             result = func(self, *args, **kwargs)
-            self.state.datasets = fod.list_datasets()
-            self.state.refresh = not self.state.refresh
             if auto_show:
                 self._auto_show()
 
@@ -196,11 +205,20 @@ class Session(foc.HasClient):
         :attr:`Session.view` property of the session to your
         :class:`fiftyone.core.view.DatasetView`.
 
+    -   To attach/remove interactive plots, use the methods exposed on the
+        :attr:`Session.plots` property of the session.
+
     -   Use :meth:`Session.refresh` to refresh the App if you update a dataset
         outside of the App
 
     -   Use :attr:`Session.selected` to retrieve the IDs of the currently
         selected samples in the App.
+
+    -   Use :attr:`Session.selected_labels` to retrieve the IDs of the
+        currently selected labels in the App.
+
+    -   In notebook contexts, use :func:`Session.freeze` to replace the App and
+        any attached plots with static images.
 
     -   Use :func:`Session.close` and :func:`Session.open` to temporarily close
         and reopen the App without creating a new :class:`Session`
@@ -214,6 +232,9 @@ class Session(foc.HasClient):
             load
         view (None): an optional :class:`fiftyone.core.view.DatasetView` to
             load
+        plots (None): an optional
+            :class:`fiftyone.core.plots.manager.PlotManager` to connect to this
+            session
         port (None): the port number to serve the App. If None,
             ``fiftyone.config.default_app_port`` is used
         remote (False): whether this is a remote session, and opening the App
@@ -221,6 +242,8 @@ class Session(foc.HasClient):
         desktop (None): whether to launch the App in the browser (False) or as
             a desktop App (True). If None, ``fiftyone.config.desktop_app`` is
             used. Not applicable to notebook contexts (e.g., Jupyter and Colab)
+        height (None): an optional height, in pixels, at which to render App
+            instances in notebook cells. Only applicable in notebook contexts
         auto (True): whether to automatically show a new App window
             whenever the state of the session is updated. Only applicable
             in notebook contexts
@@ -236,26 +259,36 @@ class Session(foc.HasClient):
         self,
         dataset=None,
         view=None,
+        plots=None,
         port=None,
         remote=False,
         desktop=None,
+        height=None,
         auto=True,
         config=None,
     ):
+        self._validate(dataset, view, plots, config)
+
         if port is None:
             port = fo.config.default_app_port
 
         if config is None:
             config = fo.app_config.copy()
 
+        if height is not None:
+            config.notebook_height = height
+
         state = self._HC_ATTR_TYPE()
         state.config = config
 
         self._context = focx._get_context()
+        self._plots = None
         self._port = port
         self._remote = remote
-        # maintain a reference to prevent garbage collection
+
+        # Maintain a reference to prevent garbage collection
         self._get_time = time.perf_counter
+
         self._WAIT_INSTRUCTIONS = _WAIT_INSTRUCTIONS
         self._disable_wait_warning = False
         self._auto = auto
@@ -291,8 +324,10 @@ class Session(foc.HasClient):
             state.dataset._reload()
 
         state.datasets = fod.list_datasets()
-        state.active_handle = self._auto_show()
-        self._update_state(state)
+        state.active_handle = self._auto_show(height=config.notebook_height)
+
+        self.plots = plots
+        self.state = state
 
         if self._remote:
             if self._context != focx._NONE:
@@ -322,6 +357,32 @@ class Session(foc.HasClient):
 
         if self._context == focx._NONE:
             self.open()
+            return
+
+    def _validate(self, dataset, view, plots, config):
+        if dataset is not None and not isinstance(dataset, fod.Dataset):
+            raise ValueError(
+                "`dataset` must be a %s or None; found %s"
+                % (fod.Dataset, type(dataset))
+            )
+
+        if view is not None and not isinstance(view, fov.DatasetView):
+            raise ValueError(
+                "`view` must be a %s or None; found %s"
+                % (fov.DatasetView, type(view))
+            )
+
+        if plots is not None and not isinstance(plots, fop.PlotManager):
+            raise ValueError(
+                "`plots` must be a %s or None; found %s"
+                % (fop.PlotManager, type(plots))
+            )
+
+        if config is not None and not isinstance(config, AppConfig):
+            raise ValueError(
+                "`config` must be a %s or None; found %s"
+                % (AppConfig, type(config))
+            )
 
     def __repr__(self):
         return self.summary()
@@ -404,7 +465,23 @@ class Session(foc.HasClient):
 
     @config.setter
     def config(self, config):
+        if config is None:
+            config = fo.app_config.copy()
+
+        if not isinstance(config, AppConfig):
+            raise ValueError(
+                "`Session.config` must be a %s or None; found %s"
+                % (AppConfig, type(config))
+            )
+
         self.state.config = config
+
+    @property
+    def _collection(self):
+        if self.view is not None:
+            return self.view
+
+        return self.dataset
 
     @property
     def dataset(self):
@@ -418,6 +495,12 @@ class Session(foc.HasClient):
     @dataset.setter
     @_update_state(auto_show=True)
     def dataset(self, dataset):
+        if dataset is not None and not isinstance(dataset, fod.Dataset):
+            raise ValueError(
+                "`Session.dataset` must be a %s or None; found %s"
+                % (fod.Dataset, type(dataset))
+            )
+
         if dataset is not None:
             dataset._reload()
 
@@ -427,7 +510,7 @@ class Session(foc.HasClient):
         self.state.selected_labels = []
         self.state.filters = {}
 
-    @_update_state
+    @_update_state()
     def clear_dataset(self):
         """Clears the current :class:`fiftyone.core.dataset.Dataset` from the
         session, if any.
@@ -444,7 +527,14 @@ class Session(foc.HasClient):
     @view.setter
     @_update_state(auto_show=True)
     def view(self, view):
+        if view is not None and not isinstance(view, fov.DatasetView):
+            raise ValueError(
+                "`Session.view` must be a %s or None; found %s"
+                % (fov.DatasetView, type(view))
+            )
+
         self.state.view = view
+
         if view is not None:
             self.state.dataset = self.state.view._dataset
             self.state.dataset._reload()
@@ -453,17 +543,44 @@ class Session(foc.HasClient):
         self.state.selected_labels = []
         self.state.filters = {}
 
-    @_update_state
+    @_update_state()
     def clear_view(self):
         """Clears the current :class:`fiftyone.core.view.DatasetView` from the
         session, if any.
         """
         self.state.view = None
 
-    @_update_state(auto_show=True)
+    @property
+    def has_plots(self):
+        """Whether this session has any attached plots."""
+        return bool(self._plots)
+
+    @property
+    def plots(self):
+        """The :class:`fiftyone.core.plots.manager.PlotManager` instance that
+        manages plots attached to this session.
+        """
+        return self._plots
+
+    @plots.setter
+    def plots(self, plots):
+        if plots is not None and not isinstance(plots, fop.PlotManager):
+            raise ValueError(
+                "`Session.plots` must be a %s or None; found %s"
+                % (fop.PlotManager, type(plots))
+            )
+
+        if plots is None:
+            plots = fop.PlotManager(self)
+        else:
+            plots._set_session(self)
+
+        self._plots = plots
+
+    @_update_state()
     def refresh(self):
-        """Refreshes the App, reloading the current dataset/view."""
-        pass
+        """Refreshes the current App window."""
+        self.state.refresh = not self.state.refresh
 
     @property
     def selected(self):
@@ -471,6 +588,32 @@ class Session(foc.HasClient):
         if any.
         """
         return list(self.state.selected)
+
+    @selected.setter
+    @_update_state()
+    def selected(self, sample_ids):
+        self.state.selected = list(sample_ids) if sample_ids else []
+
+    @_update_state()
+    def clear_selected(self):
+        """Clears the currently selected samples, if any."""
+        self.state.selected = []
+
+    @_update_state()
+    def select_samples(self, ids=None, tags=None):
+        """Selects the specified samples in the current view in the App,
+
+        Args:
+            ids (None): an ID or iterable of IDs of samples to select
+            tags (None): a tag or iterable of tags of samples to select
+        """
+        if tags is not None:
+            ids = self._collection.match_tags(tags).values("id")
+
+        if ids is None:
+            ids = []
+
+        self.state.selected = list(ids)
 
     @property
     def selected_labels(self):
@@ -485,6 +628,85 @@ class Session(foc.HasClient):
                 applicable to video samples)
         """
         return list(self.state.selected_labels)
+
+    @selected_labels.setter
+    @_update_state()
+    def selected_labels(self, labels):
+        self.state.selected_labels = list(labels) if labels else []
+
+    @_update_state()
+    def select_labels(self, labels=None, ids=None, tags=None, fields=None):
+        """Selects the specified labels in the current view in the App.
+
+        This method uses the same interface as
+        :meth:`fiftyone.core.collections.SampleCollection.select_labels` to
+        specify the labels to select.
+
+        Args:
+            labels (None): a list of dicts specifying the labels to select
+            ids (None): an ID or iterable of IDs of the labels to select
+            tags (None): a tag or iterable of tags of labels to select
+            fields (None): a field or iterable of fields from which to select
+        """
+        if labels is None:
+            labels = self._collection._get_selected_labels(
+                ids=ids, tags=tags, fields=fields
+            )
+
+        self.state.selected_labels = list(labels)
+
+    @_update_state()
+    def clear_selected_labels(self):
+        """Clears the currently selected labels, if any."""
+        self.state.selected_labels = []
+
+    @_update_state()
+    def tag_selected_samples(self, tag):
+        """Adds the tag to the currently selected samples, if necessary.
+
+        The currently selected labels are :meth:`Sesssion.selected`.
+
+        Args:
+            tag: a tag
+        """
+        self._collection.select(self.selected).tag_samples(tag)
+
+    @_update_state()
+    def untag_selected_samples(self, tag):
+        """Removes the tag from the currently selected samples, if necessary.
+
+        The currently selected labels are :meth:`Sesssion.selected`.
+
+        Args:
+            tag: a tag
+        """
+        self._collection.select(self.selected).untag_samples(tag)
+
+    @_update_state()
+    def tag_selected_labels(self, tag):
+        """Adds the tag to the currently selected labels, if necessary.
+
+        The currently selected labels are :meth:`Sesssion.selected_labels`.
+
+        Args:
+            tag: a tag
+        """
+        self._collection.select_labels(labels=self.selected_labels).tag_labels(
+            tag
+        )
+
+    @_update_state()
+    def untag_selected_labels(self, tag):
+        """Removes the tag from the currently selected labels, if necessary.
+
+        The currently selected labels are :meth:`Sesssion.selected_labels`.
+
+        Args:
+            tag: a tag
+        """
+        self._collection.select_labels(
+            labels=self.selected_labels
+        ).untag_labels(tag)
 
     def summary(self):
         """Returns a string summary of the session.
@@ -519,14 +741,20 @@ class Session(foc.HasClient):
         elif self._desktop:
             type_ = "desktop"
         else:
-            type_ = self.url
+            type_ = None
 
-        elements.append("Session type:     %s" % type_)
+        if type_ is None:
+            elements.append("Session URL:      %s" % self.url)
+        else:
+            elements.append("Session type:     %s" % type_)
 
         if self.view:
             elements.extend(
                 ["View stages:", self.view._make_view_stages_str()]
             )
+
+        if self.plots:
+            elements.append(self.plots.summary())
 
         return "\n".join(elements)
 
@@ -542,6 +770,9 @@ class Session(foc.HasClient):
         """
         if self._remote:
             raise ValueError("Remote sessions cannot launch the App")
+
+        if self.plots:
+            self.plots.connect()
 
         if self._context != focx._NONE:
             self.show()
@@ -572,6 +803,7 @@ class Session(foc.HasClient):
 
         webbrowser.open(self.url, new=2)
 
+    @_update_state()
     def show(self, height=None):
         """Opens the App in the output of the current notebook cell.
 
@@ -581,7 +813,36 @@ class Session(foc.HasClient):
             height (None): a height, in pixels, for the App
         """
         self._show(height)
-        self._update_state()
+
+    def no_show(self):
+        """Returns a context manager that temporarily prevents new App
+        instances from being opened in the current notebook cell when methods
+        are run that normally would show new App windows.
+
+        This method has no effect in non-notebook contexts.
+
+        Examples::
+
+            import fiftyone as fo
+
+            dataset = foz.load_zoo_dataset("quickstart")
+            session = fo.launch_app(dataset)
+
+            # (new cell)
+
+            # Opens a new App instance
+            session.view = dataset.take(100)
+
+            # (new cell)
+
+            # Does not open a new App instance
+            with session.no_show():
+                session.view = dataset.take(100)
+
+        Returns:
+            a context manager
+        """
+        return fou.SetAttributes(self, _auto=False)
 
     def wait(self):
         """Blocks execution until the session is closed by the user.
@@ -609,11 +870,13 @@ class Session(foc.HasClient):
         if self._remote:
             return
 
+        self.plots.disconnect()
+
         self.state.close = True
         self._update_state()
 
     def freeze(self):
-        """Screenshots the active App cell.
+        """Screenshots the active App cell, replacing it with a static image.
 
         Only applicable to notebook contexts.
         """
@@ -621,11 +884,15 @@ class Session(foc.HasClient):
             raise ValueError("Only notebook sessions can be frozen")
 
         self.state.active_handle = None
-        self._update_state()
 
-    def _auto_show(self):
-        if self._auto and (self._context != focx._NONE):
-            return self._show()
+        self._update_state()
+        self.plots.freeze()
+
+    def _auto_show(self, height=None):
+        if self._auto and self._context != focx._NONE:
+            return self._show(height=height)
+
+        return None
 
     def _capture(self, data):
         from IPython.display import HTML
@@ -659,6 +926,7 @@ class Session(foc.HasClient):
 
     def _reactivate(self, data):
         handle = data["handle"]
+        self.state.active_handle = handle
         if handle in self._handles:
             source = self._handles[handle]
             _display(
@@ -669,11 +937,18 @@ class Session(foc.HasClient):
                 source["height"],
                 update=True,
             )
-            self.state.active_handle = handle
-            self._update_state()
+
+    def _reload(self):
+        if self.dataset is None:
+            return
+
+        if self.dataset.media_type == fom.VIDEO:
+            fof.Frame._reload_docs(self.dataset._frame_collection_name)
+
+        fosa.Sample._reload_docs(self.dataset._sample_collection_name)
 
     def _show(self, height=None):
-        if (self._context == focx._NONE) or self._desktop:
+        if self._context == focx._NONE or self._desktop:
             return
 
         if self.dataset is not None:
@@ -681,9 +956,11 @@ class Session(foc.HasClient):
 
         import IPython.display
 
-        self.state.datasets = fod.list_datasets()
         handle = IPython.display.display(display_id=True)
         uuid = str(uuid4())
+
+        # @todo isn't it bad to set this here? The first time this is called
+        # is before `self.state` has been initialized
         self.state.active_handle = uuid
 
         if height is None:
@@ -691,29 +968,32 @@ class Session(foc.HasClient):
 
         self._handles[uuid] = {"target": handle, "height": height}
 
-        _display(self, handle, uuid, self._port, height=height)
+        _display(self, handle, uuid, self._port, height)
         return uuid
 
-    def _update_state(self, state=None):
-        # see fiftyone.core.client if you would like to understand this
-        self.state = state or self.state
+    def _update_state(self):
+        self.state.datasets = fod.list_datasets()
+
+        # See ``fiftyone.core.client`` to understand this
+        self.state = self.state
 
 
-def _display(session, handle, uuid, port=None, height=None, update=False):
-    """Displays a running FiftyOne instance.
-
-    Args:
-        port (None): the integer port on which the FiftyOne server is listening
-        height (None): the height of the frame into which to render the
-            FiftyOne UI, in pixels. If None, a default value is used
-    """
-    if height is None:
-        height = session.config.notebook_height
-
+def _display(session, handle, uuid, port, height, update=False):
+    """Displays a running FiftyOne instance."""
     funcs = {focx._COLAB: _display_colab, focx._IPYTHON: _display_ipython}
     fn = funcs[focx._get_context()]
+    fn(session, handle, uuid, port, height, update=update)
 
-    return fn(session, handle, uuid, port, height, update)
+
+def _display_ipython(session, handle, uuid, port, height, update=False):
+    import IPython.display
+
+    src = "http://localhost:%d/?notebook=true&handleId=%s" % (port, uuid)
+    iframe = IPython.display.IFrame(src, height=height, width="100%")
+    if update:
+        handle.update(iframe)
+    else:
+        handle.display(iframe)
 
 
 def _display_colab(session, handle, uuid, port, height, update=False):
@@ -768,14 +1048,3 @@ def _display_colab(session, handle, uuid, port, height, update=False):
             )
 
     output.register_callback("fiftyone.%s" % uuid.replace("-", "_"), capture)
-
-
-def _display_ipython(session, handle, uuid, port, height, update=False):
-    import IPython.display
-
-    src = "http://localhost:%d/?notebook=true&handleId=%s" % (port, uuid)
-    iframe = IPython.display.IFrame(src, height=height, width="100%")
-    if update:
-        handle.update(iframe)
-    else:
-        handle.display(iframe)

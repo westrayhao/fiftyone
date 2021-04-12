@@ -2,16 +2,14 @@ import mime from "mime-types";
 import React, { useState, useEffect, useRef } from "react";
 import ReactDOM from "react-dom";
 import styled from "styled-components";
-import uuid from "react-uuid";
 import { useRecoilState, useRecoilValue } from "recoil";
-import CircularProgress from "@material-ui/core/CircularProgress";
 import { Warning } from "@material-ui/icons";
 import { animated, useSpring } from "react-spring";
 
 import { ContentDiv, ContentHeader } from "./utils";
 import ExternalLink from "./ExternalLink";
 import Player51 from "player51";
-import { useEventHandler, useTheme } from "../utils/hooks";
+import { useEventHandler } from "../utils/hooks";
 import { convertSampleToETA } from "../utils/labels";
 import { useMove } from "react-use-gesture";
 
@@ -42,9 +40,13 @@ const InfoWrapper = styled.div`
 `;
 
 const TagBlock = styled.div`
-  padding: 0.5rem 0 0;
-  border-top: 2px solid ${({ theme }) => theme.font};
   margin: 0;
+`;
+
+const BorderDiv = styled.div`
+  border-top: 2px solid ${({ theme }) => theme.font};
+  width: 100%;
+  padding: 0.5rem 0 0;
 `;
 
 const AttrBlock = styled.div`
@@ -142,79 +144,113 @@ const ContentItem = ({
   );
 };
 
-const ClassificationInfo = ({ info, style }) => {
-  return (
-    <AttrBlock style={{ borderColor: info.color, ...style }}>
-      <AttrInfo field={info.field} id={info.id} />
-    </AttrBlock>
-  );
-};
-
 const useTarget = (field, target) => {
   const getTarget = useRecoilValue(selectors.getTarget);
   return getTarget(field, target);
 };
 
-const MaskInfo = ({ info, style }) => {
-  const targetValue = useTarget(info.field, info.target);
-  return (
-    <AttrBlock style={{ borderColor: info.color, ...style }}>
-      <AttrInfo field={info.field} id={info.id} />
-      <ContentItem key={"target-value"} name={"label"} value={targetValue} />
-    </AttrBlock>
+const AttrInfo = ({ field, id, frameNumber, children = null }) => {
+  const attrs = useRecoilValue(
+    selectors.modalLabelAttrs({ field, id, frameNumber })
   );
-};
-
-const AttrInfo = ({ field, id }) => {
-  const attrs = useRecoilValue(selectors.modalLabelAttrs({ field, id }));
   let entries = attrs.filter(([k, v]) => k !== "tags");
   if (!entries || !entries.length) {
     return null;
   }
-  let etc = null;
 
-  if (attrs.length > 4) {
-    const extra = entries.length - 4;
-    etc = `and ${extra} more attribue${extra > 1 ? "s" : ""}`;
-    // entries = entries.slice(0, 4);
-  }
+  const defaults = entries.filter(([name]) =>
+    ["label", "confidence"].includes(name)
+  );
+
+  const other = entries.filter(
+    ([name]) => !["label", "confidence"].includes(name)
+  );
+  const mapper = ([name, value]) => (
+    <ContentItem key={name} name={name} value={value} />
+  );
 
   return (
     <>
-      {entries.map(([name, value]) => (
-        <ContentItem key={name} name={name} value={value} />
-      ))}
+      {defaults.map(mapper)}
+      {children}
+      {other.map(mapper)}
     </>
   );
 };
 
-const DetectionInfo = ({ info, style }) => {
+const ClassificationInfo = ({ info }) => {
   return (
-    <AttrBlock style={{ borderColor: info.color, ...style }}>
-      <AttrInfo field={info.field} id={info.id} />
-    </AttrBlock>
-  );
-};
-
-const KeypointInfo = ({ info, style }) => {
-  return (
-    <AttrBlock style={{ borderColor: info.color, ...style }}>
-      <AttrInfo field={info.field} id={info.id} />
-      <ContentItem
-        key={"# keypoints"}
-        name={"# keypoints"}
-        value={info.numPoints}
+    <AttrBlock style={{ borderColor: info.color }}>
+      <AttrInfo
+        field={info.field}
+        id={info.id}
+        frameNumber={info.frameNumber}
       />
     </AttrBlock>
   );
 };
 
-const PolylineInfo = ({ info, style }) => {
+const DetectionInfo = ({ info }) => {
   return (
-    <AttrBlock style={{ borderColor: info.color, ...style }}>
-      <AttrInfo field={info.field} id={info.id} />
-      <ContentItem key={"# points"} name={"# points"} value={info.points} />
+    <AttrBlock style={{ borderColor: info.color }}>
+      <AttrInfo
+        field={info.field}
+        id={info.id}
+        frameNumber={info.frameNumber}
+      />
     </AttrBlock>
+  );
+};
+
+const KeypointInfo = ({ info }) => {
+  return (
+    <AttrBlock style={{ borderColor: info.color }}>
+      <AttrInfo field={info.field} id={info.id} frameNumber={info.frameNumber}>
+        <ContentItem
+          key={"# keypoints"}
+          name={"# keypoints"}
+          value={info.numPoints}
+        />
+      </AttrInfo>
+    </AttrBlock>
+  );
+};
+
+const MaskInfo = ({ info }) => {
+  const targetValue = useTarget(info.field, info.target);
+
+  return (
+    <AttrBlock style={{ borderColor: info.color }}>
+      <ContentItem key={"target-value"} name={"label"} value={targetValue} />
+      <AttrInfo
+        field={info.field}
+        id={info.id}
+        frameNumber={info.frameNumber}
+      />
+    </AttrBlock>
+  );
+};
+
+const PolylineInfo = ({ info }) => {
+  return (
+    <AttrBlock style={{ borderColor: info.color }}>
+      <AttrInfo field={info.field} id={info.id} frameNumber={info.frameNumber}>
+        <ContentItem key={"# points"} name={"# points"} value={info.points} />
+      </AttrInfo>
+    </AttrBlock>
+  );
+};
+
+const Border = ({ color, id }) => {
+  const selectedLabels = useRecoilValue(selectors.selectedLabelIds);
+  return (
+    <BorderDiv
+      style={{
+        borderTop: `2px ${
+          selectedLabels.has(id) ? "dashed" : "solid"
+        } ${color}`,
+      }}
+    />
   );
 };
 
@@ -226,17 +262,13 @@ const OVERLAY_INFO = {
   polyline: PolylineInfo,
 };
 
-const TagInfo = ({ field, id, color }) => {
-  const tags = useRecoilValue(selectors.modalLabelTags({ field, id }));
-  const selectedObjects = useRecoilValue(selectors.selectedObjectIds);
+const TagInfo = ({ field, id, frameNumber }) => {
+  const tags = useRecoilValue(
+    selectors.modalLabelTags({ field, id, frameNumber })
+  );
+  if (!tags.length) return null;
   return (
-    <TagBlock
-      style={{
-        borderTop: `2px ${
-          selectedObjects.has(id) ? "dashed" : "solid"
-        } ${color}`,
-      }}
-    >
+    <TagBlock>
       <ContentItem
         key={"tags"}
         name={"tags"}
@@ -257,6 +289,7 @@ const TooltipInfo = ({ player, moveRef }) => {
   const position = display
     ? coords
     : { top: -1000, left: -1000, bottom: "unset" };
+
   const coordsProps = useSpring({
     ...position,
     config: {
@@ -267,10 +300,10 @@ const TooltipInfo = ({ player, moveRef }) => {
   const ref = useRef<HTMLDivElement>(null);
 
   useEventHandler(player, "tooltipinfo", (e) => {
-    setOverlay(e.data.overlays.length ? e.data.overlays[0] : overlay);
+    setOverlay(e.data.overlays.length ? e.data.overlays[0] : null);
   });
   useEventHandler(player, "mouseenter", () => setDisplay(true));
-  //useEventHandler(player, "mouseleave", () => setDisplay(false));
+  useEventHandler(player, "mouseleave", () => setDisplay(false));
 
   useEffect(() => {
     moveRef.current = ({ values }) => {
@@ -291,13 +324,13 @@ const TooltipInfo = ({ player, moveRef }) => {
           ref={ref}
         >
           <ContentHeader key="header">{overlay.field}</ContentHeader>
+          <Border color={overlay.color} id={overlay.id} />
           <TagInfo
             key={"tags"}
             field={overlay.field}
             id={overlay.id}
-            color={overlay.color}
+            frameNumber={overlay.frameNumber}
           />
-
           <Component key={"attrs"} info={overlay} />
         </TooltipDiv>,
         document.body
@@ -305,9 +338,9 @@ const TooltipInfo = ({ player, moveRef }) => {
     : null;
 };
 
-export default ({
+const Player = ({
   thumbnail,
-  sample,
+  id,
   src,
   style,
   onClick,
@@ -321,12 +354,13 @@ export default ({
   fieldSchema = {},
   filterSelector,
   playerRef,
-  selectedObjects,
-  onSelectObject,
+  selectedLabels,
+  onSelectLabel,
 }) => {
   const isVideo = useRecoilValue(selectors.isVideoDataset);
   const filter = useRecoilValue(filterSelector);
-  const fps = useRecoilValue(atoms.sampleFrameRate(sample._id));
+  const sample = useRecoilValue(atoms.sample(id));
+  const fps = useRecoilValue(atoms.sampleFrameRate(id));
   const overlayOptions = useRecoilValue(selectors.playerOverlayOptions);
   const defaultTargets = useRecoilValue(selectors.defaultTargets);
   const [savedOverlayOptions, setSavedOverlayOptions] = useRecoilState(
@@ -336,15 +370,14 @@ export default ({
   if (overlay === null) {
     overlay = convertSampleToETA(sample, fieldSchema);
   }
-  const [mediaLoading, setMediaLoading] = useState(true);
   const [initLoad, setInitLoad] = useState(false);
   const [error, setError] = useState(null);
-  const [id] = useState(() => uuid());
   const mimetype =
     (sample.metadata && sample.metadata.mime_type) ||
     mime.lookup(sample.filepath) ||
     "image/jpg";
   const activeLabelPaths = useRecoilValue(activeLabelsAtom);
+  const colorGenerator = useRecoilValue(selectors.colorGenerator(!thumbnail));
 
   const [player] = useState(() => {
     try {
@@ -357,6 +390,7 @@ export default ({
         colorMap,
         activeLabels: activeLabelPaths,
         filter,
+        colorGenerator,
         enableOverlayOptions: {
           attrRenderMode: false,
           attrsOnlyOnClick: false,
@@ -395,10 +429,11 @@ export default ({
         filter,
         colorMap,
         fps,
+        colorGenerator,
       });
       player.updateOverlayOptions(overlayOptions);
       if (!thumbnail) {
-        player.updateOptions({ selectedObjects });
+        player.updateOptions({ selectedObjects: selectedLabels });
         player.updateOverlay(overlay);
       }
     }
@@ -412,14 +447,14 @@ export default ({
     fps,
     overlayOptions,
     defaultTargets,
-    selectedObjects,
+    selectedLabels,
+    colorGenerator,
   ]);
 
   useEffect(() => {
     return () => player && !keep && player.destroy();
   }, [player]);
 
-  useEventHandler(player, "load", () => setMediaLoading(false));
   useEventHandler(player, "load", onLoad);
   useEventHandler(player, "error", () =>
     setError(
@@ -449,15 +484,15 @@ export default ({
   useEventHandler(player, "mouseenter", onMouseEnter);
   useEventHandler(player, "mouseleave", onMouseLeave);
   useEventHandler(player, "select", (e) => {
-    const id = e.data?.id;
+    const _id = e.data?.id;
     const name = e.data?.name;
-    if (id && onSelectObject) {
-      onSelectObject({ id, name });
+    if (_id && onSelectLabel) {
+      onSelectLabel({ id: _id, name });
     }
   });
   const ref = useRef(null);
   const containerRef = useRef(null);
-  const bind = useMove((s) => ref.current && ref.current(s));
+  const bindMove = useMove((s) => ref.current && ref.current(s));
 
   useEventHandler(
     player,
@@ -476,22 +511,18 @@ export default ({
       id={id}
       style={style}
       {...props}
-      {...bind()}
+      {...bindMove()}
       ref={containerRef}
     >
-      {error || mediaLoading ? (
+      {error && (
         <InfoWrapper>
-          {error ? (
-            <>
-              <Warning classes={{ root: "error" }} />
-              {thumbnail ? null : <div>{error}</div>}{" "}
-            </>
-          ) : mediaLoading && !thumbnail ? (
-            <CircularProgress />
-          ) : null}
+          <Warning classes={{ root: "error" }} />
+          {thumbnail ? null : <div>{error}</div>}{" "}
         </InfoWrapper>
-      ) : null}
+      )}
       <TooltipInfo player={player} moveRef={ref} containerRef={containerRef} />
     </animated.div>
   );
 };
+
+export default React.memo(Player);

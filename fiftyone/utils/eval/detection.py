@@ -5,7 +5,10 @@ Detection evaluation.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
+import itertools
 import logging
+
+import numpy as np
 
 import fiftyone.core.evaluation as foe
 import fiftyone.core.utils as fou
@@ -22,7 +25,7 @@ def evaluate_detections(
     gt_field="ground_truth",
     eval_key=None,
     classes=None,
-    missing="none",
+    missing=None,
     method="coco",
     iou=0.50,
     classwise=True,
@@ -68,11 +71,13 @@ def evaluate_detections(
         gt_field ("ground_truth"): the name of the field containing the ground
             truth :class:`fiftyone.core.labels.Detections`
         eval_key (None): an evaluation key to use to refer to this evaluation
-        classes (None): the list of possible classes. If not provided, the
-            observed ground truth/predicted labels are used for results
-            purposes
-        missing ("none"): a missing label string. Any unmatched objects are
-            given this label for results purposes
+        classes (None): the list of possible classes. If not provided, classes
+            are loaded from :meth:`fiftyone.core.dataset.Dataset.classes` or
+            :meth:`fiftyone.core.dataset.Dataset.default_classes` if
+            possible, or else the observed ground truth/predicted labels are
+            used
+        missing (None): a missing label string. Any unmatched objects are given
+            this label for results purposes
         method ("coco"): a string specifying the evaluation method to use.
             Supported values are ``("coco")``
         iou (0.50): the IoU threshold to use to determine matches
@@ -88,6 +93,14 @@ def evaluate_detections(
     Returns:
         a :class:`DetectionResults`
     """
+    if classes is None:
+        if pred_field in samples.classes:
+            classes = samples.classes[pred_field]
+        elif gt_field in samples.classes:
+            classes = samples.classes[gt_field]
+        elif samples.default_classes:
+            classes = samples.default_classes
+
     config = _parse_config(
         config,
         pred_field,
@@ -95,18 +108,15 @@ def evaluate_detections(
         method,
         iou=iou,
         classwise=classwise,
-        **kwargs
+        **kwargs,
     )
     eval_method = config.build()
     eval_method.register_run(samples, eval_key)
+    eval_method.register_samples(samples)
 
-    pred_field, processing_frames = samples._handle_frame_field(pred_field)
-    gt_field, _ = samples._handle_frame_field(gt_field)
+    processing_frames = samples._is_frame_field(pred_field)
 
-    if not processing_frames:
-        iter_samples = samples.select_fields([gt_field, pred_field])
-    else:
-        iter_samples = samples
+    iter_samples = samples.select_fields([gt_field, pred_field])
 
     matches = []
     logger.info("Evaluating detections...")
@@ -141,9 +151,12 @@ def evaluate_detections(
                 sample["%s_fn" % eval_key] = sample_fn
                 sample.save()
 
-    return eval_method.generate_results(
-        samples, matches, eval_key=eval_key, classes=classes, missing=missing,
+    results = eval_method.generate_results(
+        samples, matches, eval_key=eval_key, classes=classes, missing=missing
     )
+    eval_method.save_run_results(samples, eval_key, results)
+
+    return results
 
 
 class DetectionEvaluationConfig(foe.EvaluationMethodConfig):
@@ -176,6 +189,27 @@ class DetectionEvaluation(foe.EvaluationMethod):
         config: a :class:`DetectionEvaluationConfig`
     """
 
+    def __init__(self, config):
+        super().__init__(config)
+        self.gt_field = None
+        self.pred_field = None
+
+    def register_samples(self, samples):
+        """Registers the sample collection on which evaluation will be
+        performed.
+
+        This method will be called before the first call to
+        :meth:`evaluate_image`. Subclasses can extend this method to perform
+        any setup required for an evaluation run.
+
+        Args:
+            samples: a :class:`fiftyone.core.collections.SampleCollection`
+        """
+        self.gt_field, _ = samples._handle_frame_field(self.config.gt_field)
+        self.pred_field, _ = samples._handle_frame_field(
+            self.config.pred_field
+        )
+
     def evaluate_image(self, sample_or_frame, eval_key=None):
         """Evaluates the ground truth and predicted objects in an image.
 
@@ -200,20 +234,27 @@ class DetectionEvaluation(foe.EvaluationMethod):
 
         Args:
             samples: a :class:`fiftyone.core.collections.SampleCollection`
-            matches: a list of ``(gt_label, pred_label, iou, pred_confidence)``
+            matches: a list of
+                ``(gt_label, pred_label, iou, pred_confidence, gt_id, pred_id)``
                 matches. Either label can be ``None`` to indicate an unmatched
                 object
             eval_key (None): the evaluation key for this evaluation
             classes (None): the list of possible classes. If not provided, the
                 observed ground truth/predicted labels are used for results
                 purposes
-            missing ("none"): a missing label string. Any unmatched objects are
+            missing (None): a missing label string. Any unmatched objects are
                 given this label for results purposes
 
         Returns:
             a :class:`DetectionResults`
         """
-        return DetectionResults(matches, classes=classes, missing=missing)
+        return DetectionResults(
+            matches,
+            gt_field=self.config.gt_field,
+            pred_field=self.config.pred_field,
+            classes=classes,
+            missing=missing,
+        )
 
     def get_fields(self, samples, eval_key):
         fields = [
@@ -275,19 +316,72 @@ class DetectionResults(ClassificationResults):
     """Class that stores the results of a detection evaluation.
 
     Args:
-        matches: a list of ``(gt_label, pred_label, iou, pred_confidence)``
+        matches: a list of
+            ``(gt_label, pred_label, iou, pred_confidence, gt_id, pred_id)``
             matches. Either label can be ``None`` to indicate an unmatched
             object
+        gt_field (None): the name of the ground truth field
+        pred_field (None): the name of the predictions field
         classes (None): the list of possible classes. If not provided, the
             observed ground truth/predicted labels are used
-        missing ("none"): a missing label string. Any unmatched objects are
-            given this label for evaluation purposes
+        missing (None): a missing label string. Any unmatched objects are given
+            this label for evaluation purposes
     """
 
-    def __init__(self, matches, classes=None, missing="none"):
-        ytrue, ypred, ious, confs = zip(*matches)
-        super().__init__(ytrue, ypred, confs, classes=classes, missing=missing)
-        self.ious = ious
+    def __init__(
+        self,
+        matches,
+        gt_field=None,
+        pred_field=None,
+        classes=None,
+        missing=None,
+    ):
+        ytrue, ypred, ious, confs, ytrue_ids, ypred_ids = zip(*matches)
+        super().__init__(
+            ytrue,
+            ypred,
+            confs=confs,
+            gt_field=gt_field,
+            pred_field=pred_field,
+            ytrue_ids=ytrue_ids,
+            ypred_ids=ypred_ids,
+            classes=classes,
+            missing=missing,
+        )
+        self.ious = np.array(ious)
+
+    @classmethod
+    def _from_dict(cls, d, samples, **kwargs):
+        ytrue = d["ytrue"]
+        ypred = d["ypred"]
+        ious = d["ious"]
+
+        confs = d.get("confs", None)
+        if confs is None:
+            confs = itertools.repeat(None)
+
+        ytrue_ids = d.get("ytrue_ids", None)
+        if ytrue_ids is None:
+            ytrue_ids = itertools.repeat(None)
+
+        ypred_ids = d.get("ypred_ids", None)
+        if ypred_ids is None:
+            ypred_ids = itertools.repeat(None)
+
+        gt_field = d.get("gt_field", None)
+        pred_field = d.get("pred_field", None)
+        classes = d.get("classes", None)
+        missing = d.get("missing", None)
+
+        matches = list(zip(ytrue, ypred, ious, confs, ytrue_ids, ypred_ids))
+        return cls(
+            matches,
+            gt_field=gt_field,
+            pred_field=pred_field,
+            classes=classes,
+            missing=missing,
+            **kwargs,
+        )
 
 
 def _parse_config(config, pred_field, gt_field, method, **kwargs):
@@ -309,7 +403,9 @@ def _tally_matches(matches):
     tp = 0
     fp = 0
     fn = 0
-    for gt_label, pred_label, _, _ in matches:
+    for match in matches:
+        gt_label = match[0]
+        pred_label = match[1]
         if gt_label is None:
             fp += 1
         elif pred_label is None:

@@ -9,6 +9,9 @@ from copy import copy
 import datetime
 import json
 
+import numpy as np
+
+import eta.core.serial as etas
 import eta.core.utils as etau
 
 from fiftyone.core.config import Config, Configurable
@@ -76,7 +79,7 @@ class RunConfig(Config):
     def build(self):
         """Builds the :class:`Run` instance associated with this config.
 
-        Returns:`
+        Returns:
             a :class:`Run` instance
         """
         return self.run_cls(self)
@@ -157,24 +160,26 @@ class Run(Configurable):
         """
         raise NotImplementedError("subclass must implement cleanup()")
 
-    def register_run(self, samples, key):
+    def register_run(self, samples, key, overwrite=True):
         """Registers a run of this method under the given key on the given
         collection.
 
         Args:
             samples: a :class:`fiftyone.core.collections.SampleCollection`
             key: a run key
+            overwrite (True): whether to allow overwriting an existing run of
+                the same type
         """
         if key is None:
             return
 
-        self.validate_run(samples, key)
+        self.validate_run(samples, key, overwrite=overwrite)
         timestamp = datetime.datetime.utcnow()
         run_info_cls = self.run_info_cls()
         run_info = run_info_cls(key, timestamp=timestamp, config=self.config)
         self.save_run_info(samples, run_info)
 
-    def validate_run(self, samples, key):
+    def validate_run(self, samples, key, overwrite=True):
         """Validates that the collection can accept this run.
 
         The run may be invalid if, for example, a run of a different type has
@@ -184,6 +189,11 @@ class Run(Configurable):
         Args:
             samples: a :class:`fiftyone.core.collections.SampleCollection`
             key: a run key
+            overwrite (True): whether to allow overwriting an existing run of
+                the same type
+
+        Raises:
+            ValueError: if the run is invalid
         """
         if not etau.is_str(key) or not key.isidentifier():
             raise ValueError(
@@ -193,6 +203,12 @@ class Run(Configurable):
 
         if key not in self.list_runs(samples):
             return
+
+        if not overwrite:
+            raise ValueError(
+                "%s with key '%s' already exists"
+                % (self._run_str().capitalize(), key)
+            )
 
         existing_info = self.get_run_info(samples, key)
 
@@ -219,6 +235,9 @@ class Run(Configurable):
             samples: a :class:`fiftyone.core.collections.SampleCollection`
             key: a run key
             existing_info: a :class:`RunInfo`
+
+        Raises:
+            ValueError: if the run is invalid
         """
         pass
 
@@ -269,23 +288,94 @@ class Run(Configurable):
         return run_info_cls._from_doc(run_doc)
 
     @classmethod
-    def save_run_info(cls, samples, run_info):
+    def save_run_info(cls, samples, run_info, overwrite=True):
         """Saves the run information on the collection.
 
         Args:
             samples: a :class:`fiftyone.core.collections.SampleCollection`
             run_info: a :class:`RunInfo`
+            overwrite (True): whether to overwrite an existing run with the
+                same key
         """
         key = run_info.key
         view_stages = [json.dumps(s) for s in samples.view()._serialize()]
         run_docs = getattr(samples._dataset._doc, cls._runs_field())
+
+        if key in run_docs:
+            if overwrite:
+                cls.delete_run(samples, key)
+            else:
+                raise ValueError(
+                    "%s with key '%s' already exists"
+                    % (cls._run_str().capitalize(), key)
+                )
+
         run_docs[key] = RunDocument(
             key=key,
             timestamp=run_info.timestamp,
             config=run_info.config.serialize(),
             view_stages=view_stages,
+            results=None,
         )
         samples._dataset.save()
+
+    @classmethod
+    def save_run_results(cls, samples, key, run_results, overwrite=True):
+        """Saves the run results on the collection.
+
+        Args:
+            samples: a :class:`fiftyone.core.collections.SampleCollection`
+            key: a run key
+            run_results: a :class:`RunResults`, or None
+            overwrite (True): whether to overwrite an existing result with the
+                same key
+        """
+        if key is None:
+            return
+
+        run_docs = getattr(samples._dataset._doc, cls._runs_field())
+        run_doc = run_docs[key]
+
+        if run_doc.results:
+            if overwrite:
+                # Must manually delete existing result from GridFS
+                run_doc.results.delete()
+            else:
+                raise ValueError(
+                    "%s with key '%s' already has results"
+                    % (cls._run_str().capitalize(), key)
+                )
+
+        if run_results is None:
+            run_doc.results = None
+        else:
+            # Write run result to GridFS
+            results_bytes = run_results.to_str().encode()
+            run_doc.results.put(results_bytes, content_type="application/json")
+
+        samples._dataset.save()
+
+    @classmethod
+    def load_run_results(cls, samples, key):
+        """Loads the :class:`RunResults` for the given key on the collection.
+
+        Args:
+            samples: a :class:`fiftyone.core.collections.SampleCollection`
+            key: a run key
+
+        Returns:
+            a :class:`RunResults`, or None if the run did not save results
+        """
+        run_doc = cls._get_run_doc(samples, key)
+
+        if not run_doc.results:
+            return None
+
+        # Load run result from GridFS
+        view = cls.load_run_view(samples, key)
+        run_doc.results.seek(0)
+        results_str = run_doc.results.read().decode()
+        return RunResults.from_str(results_str, view)
 
     @classmethod
     def load_run_view(cls, samples, key, select_fields=False):
@@ -350,11 +440,19 @@ class Run(Configurable):
             samples: a :class:`fiftyone.core.collections.SampleCollection`
             key: a run key
         """
+        # Cleanup run
         run_info = cls.get_run_info(samples, key)
         run = run_info.config.build()
         run.cleanup(samples, key)
+
+        # Delete run from dataset
         run_docs = getattr(samples._dataset._doc, cls._runs_field())
-        run_docs.pop(key, None)
+        run_doc = run_docs.pop(key, None)
+
+        # Must manually delete run result, which is stored via GridFS
+        if run_doc and run_doc.results:
+            run_doc.results.delete()
+
         samples._dataset.save()
 
     @classmethod
@@ -384,3 +482,50 @@ class Run(Configurable):
         run_info = cls.get_run_info(samples, key)
         run = run_info.config.build()
         return run.get_fields(samples, key)
+
+
+class RunResults(etas.Serializable):
+    """Base class for storing the results of a run."""
+
+    @property
+    def cls(self):
+        """The fully-qualified name of this :class:`RunResults` class."""
+        return etau.get_class_name(self)
+
+    def attributes(self):
+        """Returns the list of class attributes that will be serialized by
+        :meth:`serialize`.
+
+        Returns:
+            a list of attributes
+        """
+        return ["cls"] + super().attributes()
+
+    @classmethod
+    def from_dict(cls, d, samples):
+        """Builds a :class:`RunResults` from a JSON dict representation of it.
+
+        Args:
+            d: a JSON dict
+            samples: the :class:`fiftyone.core.collections.SampleCollection`
+                for the run
+
+        Returns:
+            a :class:`RunResults`
+        """
+        run_results_cls = etau.get_class(d["cls"])
+        return run_results_cls._from_dict(d, samples)
+
+    @classmethod
+    def _from_dict(cls, d, samples):
+        """Subclass implementation of :meth:`from_dict`.
+
+        Args:
+            d: a JSON dict
+            samples: the :class:`fiftyone.core.collections.SampleCollection`
+                for the run
+
+        Returns:
+            a :class:`RunResults`
+        """
+        raise NotImplementedError("subclass must implement _from_dict()")

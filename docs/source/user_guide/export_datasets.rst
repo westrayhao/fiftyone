@@ -149,8 +149,11 @@ format when writing the dataset to disk.
     | :ref:`BDDDataset <BDDDataset-export>`                              | A labeled dataset consisting of images and their associated multitask predictions  |
     |                                                                    | saved in `Berkeley DeepDrive (BDD) format <https://bdd-data.berkeley.edu>`_.       |
     +--------------------------------------------------------------------+------------------------------------------------------------------------------------+
-    | :ref:`FiftyOneDataset <FiftyOneDataset-export>`                    | A dataset consisting of an arbitrary serialized |Dataset| and its associated       |
-    |                                                                    | source data.                                                                       |
+    | :ref:`GeoJSONImageDataset <GeoJSONImageDataset-export>`            | An image dataset whose labels and location data are stored in                      |
+    |                                                                    | `GeoJSON format <https://en.wikipedia.org/wiki/GeoJSON>`_.                         |
+    +--------------------------------------------------------------------+------------------------------------------------------------------------------------+
+    | :ref:`FiftyOneDataset <FiftyOneDataset-export>`                    | A dataset consisting of an entire serialized |Dataset| and its associated source   |
+    |                                                                    | media.                                                                             |
     +--------------------------------------------------------------------+------------------------------------------------------------------------------------+
     | :ref:`Custom formats <custom-dataset-exporter>`                    | Export datasets in custom formats by defining your own |DatasetType| or            |
     |                                                                    | |DatasetExporter| class.                                                           |
@@ -1742,50 +1745,152 @@ follows:
             --label-field $LABEL_FIELD \
             --type fiftyone.types.BDDDataset
 
+.. _GeoJSONImageDataset-export:
+
+GeoJSONImageDataset
+-------------------
+
+The :class:`fiftyone.types.GeoJSONImageDataset <fiftyone.types.dataset_types.GeoJSONImageDataset>`
+type represents a dataset consisting of images and their associated
+geolocation data and optional properties stored in
+`GeoJSON format <https://en.wikipedia.org/wiki/GeoJSON>`_.
+
+Datasets of this type are exported in the following format:
+
+.. code-block:: text
+
+    <dataset_dir>/
+        data/
+            <filename1>.<ext>
+            <filename2>.<ext>
+            ...
+        labels.json
+
+where ``labels.json`` is a GeoJSON file containing a ``FeatureCollection`` in
+the following format:
+
+.. code-block:: text
+
+    {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [
+                        -73.99496451958454,
+                        40.66338032487842
+                    ]
+                },
+                "properties": {
+                    "filename": <filename1>.<ext>,
+                    ...
+                }
+            },
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [
+                        -73.80992143421788,
+                        40.65611832778962
+                    ]
+                },
+                "properties": {
+                    "filename": <filename2>.<ext>,
+                    ...
+                }
+            },
+            ...
+        ]
+    }
+
+where the ``geometry`` field may contain any valid GeoJSON geometry object, and
+the ``filename`` property encodes the name of the corresponding image in the
+``data/`` folder.
+
+Alternatively, the ``filepath`` property may be specified rather than
+``filename``, in which case the path is interpreted as an absolute path to the
+corresponding image.
+
+Images with no location data will have a null ``geometry`` field.
+
+The ``properties`` field of each feature can contain additional labels for
+each sample.
+
+You can export a FiftyOne dataset as a GeoJSON image dataset in the above
+format as follows:
+
+.. tabs::
+
+  .. group-tab:: Python
+
+    .. code-block:: python
+        :linenos:
+
+        import fiftyone as fo
+
+        export_dir = "/path/for/geojson-image-dataset"
+
+        # The Dataset or DatasetView to export
+        dataset_or_view = fo.Dataset(...)
+
+        # Export the dataset
+        dataset_or_view.export(
+            export_dir=export_dir,
+            dataset_type=fo.types.GeoJSONImageDataset,
+        )
+
+  .. group-tab:: CLI
+
+    .. code-block:: shell
+
+        NAME=my-dataset
+        EXPORT_DIR=/path/for/geojson-image-dataset
+
+        # Export the dataset
+        fiftyone datasets export $NAME \
+            --export-dir $EXPORT_DIR \
+            --type fiftyone.types.GeoJSONImageDataset
+
 .. _FiftyOneDataset-export:
 
 FiftyOneDataset
 ---------------
 
 The :class:`fiftyone.types.FiftyOneDataset <fiftyone.types.dataset_types.FiftyOneDataset>`
-provides a disk representation of a |Dataset|, including its |Sample| instances
-stored in a serialized JSON format, and the associated source data.
+provides a disk representation of an entire |Dataset| in a serialized JSON
+format along with its source media.
 
-Non-video datasets of this type are exported in the following format:
-
-.. code-block:: text
-
-    <dataset_dir>/
-        data/
-            <filename1>.<ext>
-            <filename2>.<ext>
-            ...
-        metadata.json
-        samples.json
-
-where `metadata.json` is an optional JSON file containing metadata associated
-with the dataset, and `samples.json` is a JSON file containing a serialized
-representation of the samples in the dataset generated by
-:meth:`Sample.to_dict() <fiftyone.core.sample.Sample.to_dict>`.
-
-Video datasets of this type are exported in the following format:
+Datasets of this type are exported in the following format:
 
 .. code-block:: text
 
     <dataset_dir>/
+        metadata.json
+        samples.json
         data/
             <filename1>.<ext>
             <filename2>.<ext>
             ...
-        frames/
-            <filename1>.json
-            <filename2>.json
+        evaluations/
+            <eval_key1>.json
+            <eval_key2>.json
             ...
-        metadata.json
-        samples.json
+        brain/
+            <brain_key1>.json
+            <brain_key2>.json
+            ...
 
-where the additional `frames/` directory contains a serialized representation
-of the frame labels for each video in the dataset.
+where `metadata.json` is a JSON file containing metadata associated with the
+dataset, `samples.json` is a JSON file containing a serialized representation
+of the samples in the dataset, `evaluations/` contains any serialized
+|EvaluationResults| for the dataset, and `brain/` contains any serialized
+|BrainResults| for the dataset.
+
+Video datasets have an additional `frames.json` file that contains a serialized
+representation of the frame labels for each video in the dataset.
 
 You can export a FiftyOne dataset to disk in the above format as follows:
 
@@ -1799,7 +1904,6 @@ You can export a FiftyOne dataset to disk in the above format as follows:
         import fiftyone as fo
 
         export_dir = "/path/for/fiftyone-dataset"
-        label_field = "ground_truth"  # for example
 
         # The Dataset or DatasetView to export
         dataset_or_view = fo.Dataset(...)
@@ -1808,7 +1912,6 @@ You can export a FiftyOne dataset to disk in the above format as follows:
         dataset_or_view.export(
             export_dir=export_dir,
             dataset_type=fo.types.FiftyOneDataset,
-            label_field=label_field,
         )
 
   .. group-tab:: CLI
@@ -1817,12 +1920,10 @@ You can export a FiftyOne dataset to disk in the above format as follows:
 
         NAME=my-dataset
         EXPORT_DIR=/path/for/fiftyone-dataset
-        LABEL_FIELD=ground_truth  # for example
 
         # Export the dataset
         fiftyone datasets export $NAME \
             --export-dir $EXPORT_DIR \
-            --label-field $LABEL_FIELD \
             --type fiftyone.types.FiftyOneDataset
 
 .. _custom-dataset-exporter:
@@ -1968,8 +2069,8 @@ should implement is determined by the type of dataset that you are exporting.
 
                     Subclasses can optionally implement this method if their export format
                     can record information such as the
-                    :meth:`fiftyone.core.collections.SampleCollection.name` and
-                    :meth:`fiftyone.core.collections.SampleCollection.info` of the
+                    :meth:`fiftyone.core.collections.SampleCollection.info` or
+                    :meth:`fiftyone.core.collections.SampleCollection.classes` of the
                     collection being exported.
 
                     By convention, this method must be optional; i.e., if it is not called

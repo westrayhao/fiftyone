@@ -149,39 +149,35 @@ If you upgrade your `fiftyone` package and then load a dataset that was created
 with an older version of the package, it will be automatically migrated to the
 new package version (if necessary) the first time you load it.
 
-Storing dataset information
----------------------------
+.. _storing-info:
+
+Storing info
+------------
 
 All |Dataset| instances have an
 :meth:`info <fiftyone.core.dataset.Dataset.info>` property, which contains a
-dictionary that you can use to store any (JSON-serializable) information you
-wish about your dataset.
+dictionary that you can use to store any JSON-serializable information you wish
+about your dataset.
 
-A typical use case is to store the class list for a classification/detection
-model:
-
-.. code-block:: python
-
-    # Store a class list in the dataset's info
-    dataset1.info["classes"] = ["bird", "cat", "deer", "dog", "frog", "horse"]
-    dataset1.save()
-
-In a new Python session:
+Datasets can also store more specific types of ancillary information such as
+:ref:`class lists <storing-classes>` and
+:ref:`mask targets <storing-mask-targets>`.
 
 .. code-block:: python
-    :linenos:
 
     import fiftyone as fo
 
-    dataset = fo.load_dataset("my_first_dataset")
+    dataset = fo.Dataset()
 
-    # Load the class list for the dataset
-    classes = dataset.info["classes"]
-    print(classes)  # ['bird', 'cat', 'deer', ...]
+    # Store a class list in the dataset's info
+    dataset.info = {
+        "dataset_source": "https://...",
+        "author": "...",
+    }
 
-Datasets can also store more specific types of ancillary information such as
-mask targets for |Segmentation| fields. See
-:ref:`this section <storing-mask-targets>` for more details.
+    # Edit existing info
+    dataset.info["owner"] = "..."
+    dataset.save()  # must save after edits
 
 .. note::
 
@@ -189,6 +185,122 @@ mask targets for |Segmentation| fields. See
     :meth:`dataset.save() <fiftyone.core.dataset.Dataset.save>` after updating
     the dataset's :meth:`info <fiftyone.core.dataset.Dataset.info>` property to
     save the changes to the database.
+
+.. _storing-classes:
+
+Storing class lists
+-------------------
+
+All |Dataset| instances have
+:meth:`classes <fiftyone.core.dataset.Dataset.classes>` and
+:meth:`default_classes <fiftyone.core.dataset.Dataset.default_classes>`
+properties that you can use to store the lists of possible classes for your
+annotations/models.
+
+The :meth:`classes <fiftyone.core.dataset.Dataset.classes>` property is a
+dictionary mapping field names to class lists for a single |Label| field of the
+dataset.
+
+If all |Label| fields in your dataset have the same semantics, you can store a
+single class list in the store a single target dictionary in the
+:meth:`default_classes <fiftyone.core.dataset.Dataset.default_classes>`
+property of your dataset.
+
+These class lists are automatically used, if available, by methods such as
+:meth:`evaluate_classifications() <fiftyone.core.collections.SampleCollection.evaluate_classifications>`
+and
+:meth:`evaluate_detections() <fiftyone.core.collections.SampleCollection.evaluate_detections>`
+that require knowledge of the possible classes in a field.
+
+.. code-block:: python
+    :linenos:
+
+    import fiftyone as fo
+
+    dataset = fo.Dataset()
+
+    # Set default classes
+    dataset.default_classes = ["cat", "dog"]
+
+    # Edit the default classes
+    dataset.default_classes.append("other")
+    dataset.save()  # must save after edits
+
+    # Set classes for the `ground_truth` and `predictions` fields
+    dataset.classes = {
+        "ground_truth": ["cat", "dog"],
+        "predictions": ["cat", "dog", "other"],
+    }
+
+    # Edit a field's classes
+    dataset.classes["ground_truth"].append("other")
+    dataset.save()  # must save after edits
+
+.. note::
+
+    You must call
+    :meth:`dataset.save() <fiftyone.core.dataset.Dataset.save>` after updating
+    the dataset's :meth:`classes <fiftyone.core.dataset.Dataset.classes>` and
+    :meth:`default_classes <fiftyone.core.dataset.Dataset.default_classes>`
+    properties to save the changes to the database.
+
+.. _storing-mask-targets:
+
+Storing mask targets
+--------------------
+
+All |Dataset| instances have
+:meth:`mask_targets <fiftyone.core.dataset.Dataset.mask_targets>` and
+:meth:`default_mask_targets <fiftyone.core.dataset.Dataset.default_mask_targets>`
+properties that you can use to store label strings for the pixel values of
+|Segmentation| field masks.
+
+The :meth:`mask_targets <fiftyone.core.dataset.Dataset.mask_targets>` property
+is a dictionary mapping field names to target dicts, each of which is a
+dictionary defining the mapping between pixel values and label strings for the
+|Segmentation| masks in the specified field of the dataset.
+
+If all |Segmentation| fields in your dataset have the same semantics, you can
+store a single target dictionary in the
+:meth:`default_mask_targets <fiftyone.core.dataset.Dataset.default_mask_targets>`
+property of your dataset.
+
+When you load datasets with |Segmentation| fields in the App that have
+corresponding mask targets, the label strings will appear in the App's tooltip
+when you hover over pixels.
+
+.. code-block:: python
+    :linenos:
+
+    import fiftyone as fo
+
+    dataset = fo.Dataset()
+
+    # Set default mask targets
+    dataset.default_mask_targets = {1: "cat", 2: "dog"}
+
+    # Edit the default mask targets
+    dataset.default_mask_targets[255] = "other"
+    dataset.save()  # must save after edits
+
+    # Set mask targets for the `ground_truth` and `predictions` fields
+    dataset.mask_targets = {
+        "ground_truth": {1: "cat", 2: "dog"},
+        "predictions": {1: "cat", 2: "dog", 255: "other"},
+    }
+
+    # Edit an existing mask target
+    dataset.mask_targets["ground_truth"][255] = "other"
+    dataset.save()  # must save after edits
+
+.. note::
+
+    You must call
+    :meth:`dataset.save() <fiftyone.core.dataset.Dataset.save>` after updating
+    the dataset's
+    :meth:`mask_targets <fiftyone.core.dataset.Dataset.mask_targets>` and
+    :meth:`default_mask_targets <fiftyone.core.dataset.Dataset.default_mask_targets>`
+    properties to save the changes to the database.
 
 Deleting a dataset
 ------------------
@@ -483,7 +595,6 @@ printing it:
     Media type:     image
     Num samples:    0
     Persistent:     False
-    Info:           {}
     Tags:           []
     Sample fields:
         media_type: fiftyone.core.fields.StringField
@@ -527,7 +638,6 @@ updated to reflect the new field:
     Media type:     image
     Num samples:    0
     Persistent:     False
-    Info:           {}
     Tags:           []
     Sample fields:
         media_type:    fiftyone.core.fields.StringField
@@ -894,6 +1004,11 @@ be visualized in the App or used by Brain methods, e.g., when
         }>,
     }>
 
+.. note::
+
+    Did you know? You can :ref:`store class lists <storing-classes>` for your
+    models on your datasets.
+
 .. _multilabel-classification:
 
 Multilabel classification
@@ -992,6 +1107,11 @@ overarching model (if applicable) in the
         }>,
     }>
 
+.. note::
+
+    Did you know? You can :ref:`store class lists <storing-classes>` for your
+    models on your datasets.
+
 .. _object-detection:
 
 Object detection
@@ -1078,6 +1198,11 @@ detection can be stored in the
             ]),
         }>,
     }>
+
+.. note::
+
+    Did you know? You can :ref:`store class lists <storing-classes>` for your
+    models on your datasets.
 
 .. _objects-with-instance-segmentations:
 
@@ -1300,7 +1425,7 @@ Polylines can also have string labels, which are stored in their
     polyline1 = fo.Polyline(
         points=[[(0.3, 0.3), (0.7, 0.3), (0.7, 0.3)]],
         closed=False,
-        filled=False
+        filled=False,
     )
 
     # A closed, filled polygon with a label
@@ -1308,7 +1433,7 @@ Polylines can also have string labels, which are stored in their
         label="triangle",
         points=[[(0.1, 0.1), (0.3, 0.1), (0.3, 0.3)]],
         closed=True,
-        filled=True
+        filled=True,
     )
 
     sample["polylines"] = fo.Polylines(polylines=[polyline1, polyline2])
@@ -1619,64 +1744,124 @@ is rendered as a distinct color.
     The mask value ``0`` is a reserved "background" class that is rendered as
     invislble in the App.
 
-.. _storing-mask-targets:
+.. note::
 
-Storing mask targets
---------------------
+    Did you know? You can :ref:`store semantic labels <storing-mask-targets>`
+    for your segmentation fields on your dataset. Then, when you view the
+    dataset in the App, label strings will appear in the App's tooltip when you
+    hover over pixels.
 
-All |Dataset| instances have
-:meth:`mask_targets <fiftyone.core.dataset.Dataset.mask_targets>` and
-:meth:`default_mask_targets <fiftyone.core.dataset.Dataset.default_mask_targets>`
-properties that you can use to store label strings for the pixel values of
-|Segmentation| field masks.
+.. _geolocation:
 
-The :meth:`mask_targets <fiftyone.core.dataset.Dataset.mask_targets>` property
-is a dictionary mapping field names to target dicts, each of which is a
-dictionary defining the mapping between pixel values and label strings for the
-|Segmentation| masks in the specified field of the dataset.
+Geolocation
+-----------
 
-If all |Segmentation| fields in your dataset have the same semantics, you can
-store a single target dictionary in the
-:meth:`default_mask_targets <fiftyone.core.dataset.Dataset.default_mask_targets>`
-property of your dataset.
+The |GeoLocation| class can store single pieces of location data in its
+properties:
 
-When you load datasets with |Segmentation| fields in the App that have
-corresponding mask targets, the label strings will appear in the App's tooltip
-when you hover over pixels.
+-   :attr:`point <fiftyone.core.labels.GeoLocation.point>`: a
+    ``[longitude, latitude]`` point
+-   :attr:`line <fiftyone.core.labels.GeoLocation.line>`: a line of longitude
+    and latitude coordinates stored in the following format::
+
+        [[lon1, lat1], [lon2, lat2], ...]
+
+-   :attr:`polygon <fiftyone.core.labels.GeoLocation.polygon>`: a polygon of
+    longitude and latitude coordinates stored in the format below, where the
+    first element describes the boundary of the polygon and any remaining
+    entries describe holes::
+
+        [
+            [[lon1, lat1], [lon2, lat2], ...],
+            [[lon1, lat1], [lon2, lat2], ...],
+            ...
+        ]
+
+.. note::
+
+    All geolocation coordinates are stored in ``[longitude, latitude]``
+    format.
+
+If you have multiple geometries of each type that you wish to store on a single
+sample, then you can use the |GeoLocations| class and its appropriate
+properites to do so.
 
 .. code-block:: python
     :linenos:
 
     import fiftyone as fo
 
-    dataset = fo.Dataset()
+    sample = fo.Sample(filepath="/path/to/image.png")
 
-    # Set default mask targets
-    dataset.default_mask_targets = {1: "cat", 2: "dog"}
+    sample["location"] = fo.GeoLocation(
+        point=[-73.9855, 40.7580],
+        polygon=[
+            [
+                [-73.949701, 40.834487],
+                [-73.896611, 40.815076],
+                [-73.998083, 40.696534],
+                [-74.031751, 40.715273],
+                [-73.949701, 40.834487],
+            ]
+        ],
+    )
 
-    # Edit the default mask targets
-    dataset.default_mask_targets[255] = "other"
-    dataset.save()  # must save after edits
+    print(sample)
 
-    # Set mask targets for the `ground_truth` and `predictions` fields
-    dataset.mask_targets = {
-        "ground_truth": {1: "cat", 2: "dog"},
-        "predictions": {1: "cat": 2: "dog", 255: "other"},
-    }
+.. code-block:: text
 
-    # Edit an existing mask target
-    dataset.mask_targets["ground_truth"][255] = "other"
-    dataset.save()  # must save after edits
+    <Sample: {
+        'id': None,
+        'media_type': 'image',
+        'filepath': '/path/to/image.png',
+        'tags': [],
+        'metadata': None,
+        'location': <GeoLocation: {
+            'id': '60481f3936dc48428091e926',
+            'tags': BaseList([]),
+            'point': [-73.9855, 40.758],
+            'line': None,
+            'polygon': [
+                [
+                    [-73.949701, 40.834487],
+                    [-73.896611, 40.815076],
+                    [-73.998083, 40.696534],
+                    [-74.031751, 40.715273],
+                    [-73.949701, 40.834487],
+                ],
+            ],
+        }>,
+    }>
 
 .. note::
 
-    You must call
-    :meth:`dataset.save() <fiftyone.core.dataset.Dataset.save>` after updating
-    the dataset's
-    :meth:`default_mask_targets <fiftyone.core.dataset.Dataset.default_mask_targets>`
-    and
-    :meth:`mask_targets <fiftyone.core.dataset.Dataset.mask_targets>`
-    properties to save the changes to the database.
+    Did you know? You can create
+    :ref:`location-based views <geolocation-views>` that filter your data by
+    their location!
+
+All location data is stored in
+`GeoJSON format <https://en.wikipedia.org/wiki/GeoJSON>`_ in the database. You
+can easily retrieve the raw GeoJSON data for a slice of your dataset using the
+:ref:`values() <aggregations-values>` aggregation:
+
+.. code-block:: python
+    :linenos:
+
+    import fiftyone as fo
+    import fiftyone.zoo as foz
+
+    dataset = foz.load_zoo_dataset("quickstart-geo")
+
+    values = dataset.take(5).values("location.point")
+    print(values)
+
+.. code-block:: text
+
+    [{'type': 'Point', 'coordinates': [-73.9592175465766, 40.71052995514191]},
+     {'type': 'Point', 'coordinates': [-73.97748118760413, 40.74660360881843]},
+     {'type': 'Point', 'coordinates': [-73.9508690871987, 40.766631164626]},
+     {'type': 'Point', 'coordinates': [-73.96569416502996, 40.75449283200206]},
+     {'type': 'Point', 'coordinates': [-73.97397106211423, 40.67925541341504]}]
 
 .. _video-frame-labels:
 
@@ -1815,7 +2000,7 @@ in your dataset. For example, a view may contain only samples with a given tag,
 or samples whose labels meet a certain criteria.
 
 In turn, each |SampleView| represents a view into the content of the underlying
-|Sample| in the datset. For example, a |SampleView| may represent the contents
+|Sample| in the dataset. For example, a |SampleView| may represent the contents
 of a sample with |Detections| below a specified threshold filtered out.
 
 .. custombutton::

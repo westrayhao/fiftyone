@@ -11,14 +11,28 @@ import weakref
 
 from pymongo import ReplaceOne
 
-from fiftyone.core.expressions import ViewField as F
 from fiftyone.core.document import Document
 import fiftyone.core.frame_utils as fofu
-from fiftyone.core.odm.frame import (
-    NoDatasetFrameSampleDocument,
-    DatasetFrameSampleDocument,
-)
+import fiftyone.core.odm as foo
 import fiftyone.core.utils as fou
+
+
+def get_default_frame_fields(include_private=False, include_id=False):
+    """Returns the default fields present on all frames.
+
+    Args:
+        include_private (False): whether to include fields that start with
+            ``_``
+        include_id (False): whether to include ID fields
+
+    Returns:
+        a tuple of field names
+    """
+    return foo.get_default_fields(
+        foo.DatasetFrameSampleDocument,
+        include_private=include_private,
+        include_id=include_id,
+    )
 
 
 #
@@ -57,13 +71,16 @@ class Frames(object):
             return len(self._replacements)
 
         self._save_replacements()
-        return self._frame_collection.find(
-            {"_sample_id": self._sample._id}
-        ).count()
+        return self._frames_view.count("frames")
 
     @property
     def _view(self):
         return getattr(self._sample, "_view", None)
+
+    @property
+    def _frames_view(self):
+        view = self._view or self._sample._dataset
+        return view.select(self._sample.id)
 
     def _set_replacement(self, frame):
         self._replacements[frame.frame_number] = frame
@@ -107,10 +124,7 @@ class Frames(object):
         self._replacements = {}
 
     def _make_filter(self, frame_number, sample_id):
-        return {
-            "frame_number": frame_number,
-            "_sample_id": sample_id,
-        }
+        return {"frame_number": frame_number, "_sample_id": sample_id}
 
     def _make_dict(self, frame):
         d = frame._doc.to_dict(extended=False)
@@ -168,7 +182,9 @@ class Frames(object):
             )
             self._set_replacement(frame)
         else:
-            frame = Frame.from_doc(NoDatasetFrameSampleDocument(**default_d))
+            frame = Frame.from_doc(
+                foo.NoDatasetFrameSampleDocument(**default_d)
+            )
             self._set_replacement(frame)
 
         return frame
@@ -340,15 +356,11 @@ class Frames(object):
 
         repl_fns = sorted(self._replacements.keys())
         repl_fn = repl_fns[0] if repl_fns else None
-        view = self._view or self._sample._dataset
-        try:
-            result = next(
-                view.match(F("filepath") == self._sample.filepath)._aggregate()
-            )
-        except:
-            result = {"frames": []}
 
-        for d in result["frames"]:
+        frame_dicts = self._frames_view._aggregate(frames_only=True)
+        frame_dicts = sorted(frame_dicts, key=lambda d: d["frame_number"])
+
+        for d in frame_dicts:
             if repl_fn is not None and d["frame_number"] >= repl_fn:
                 self._iter_frame = self._replacements[repl_fn]
                 repl_fn += 1
@@ -393,11 +405,11 @@ class Frame(Document):
     # Instance references keyed by [collection_name][sample_id][frame_number]
     _instances = defaultdict(lambda: defaultdict(weakref.WeakValueDictionary))
 
-    _COLL_CLS = DatasetFrameSampleDocument
-    _NO_COLL_CLS = NoDatasetFrameSampleDocument
+    _COLL_CLS = foo.DatasetFrameSampleDocument
+    _NO_COLL_CLS = foo.NoDatasetFrameSampleDocument
 
     def __init__(self, **kwargs):
-        self._doc = NoDatasetFrameSampleDocument(**kwargs)
+        self._doc = foo.NoDatasetFrameSampleDocument(**kwargs)
         super().__init__()
 
     def __str__(self):
@@ -450,7 +462,7 @@ class Frame(Document):
         Returns:
             a :class:`Frame`
         """
-        if isinstance(doc, NoDatasetFrameSampleDocument):
+        if isinstance(doc, foo.NoDatasetFrameSampleDocument):
             frame = cls.__new__(cls)
             frame._dataset = None
             frame._doc = doc

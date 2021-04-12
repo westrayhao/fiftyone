@@ -5,6 +5,7 @@ Dataset sample fields.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
+from bson import SON
 from bson.binary import Binary
 import mongoengine.fields
 import numpy as np
@@ -54,14 +55,26 @@ class Field(mongoengine.fields.BaseField):
         return etau.get_class_name(self)
 
 
-class IntField(mongoengine.IntField, Field):
+class IntField(mongoengine.fields.IntField, Field):
     """A 32 bit integer field."""
 
     pass
 
 
-class ObjectIdField(mongoengine.ObjectIdField, Field):
+class ObjectIdField(mongoengine.fields.ObjectIdField, Field):
     """An Object ID field."""
+
+    pass
+
+
+class UUIDField(mongoengine.fields.UUIDField, Field):
+    """A UUID field."""
+
+    pass
+
+
+class BooleanField(mongoengine.fields.BooleanField, Field):
+    """A boolean field."""
 
     pass
 
@@ -76,19 +89,7 @@ class FrameNumberField(IntField):
             self.error(str(e))
 
 
-class UUIDField(mongoengine.UUIDField, Field):
-    """A UUID field."""
-
-    pass
-
-
-class BooleanField(mongoengine.BooleanField, Field):
-    """A boolean field."""
-
-    pass
-
-
-class FloatField(mongoengine.FloatField, Field):
+class FloatField(mongoengine.fields.FloatField, Field):
     """A floating point number field."""
 
     def validate(self, value):
@@ -106,13 +107,13 @@ class FloatField(mongoengine.FloatField, Field):
             self.error("Float value is too large")
 
 
-class StringField(mongoengine.StringField, Field):
+class StringField(mongoengine.fields.StringField, Field):
     """A unicode string field."""
 
     pass
 
 
-class ListField(mongoengine.ListField, Field):
+class ListField(mongoengine.fields.ListField, Field):
     """A list field that wraps a standard :class:`Field`, allowing multiple
     instances of the field to be stored as a list in the database.
 
@@ -143,7 +144,7 @@ class ListField(mongoengine.ListField, Field):
         return etau.get_class_name(self)
 
 
-class DictField(mongoengine.DictField, Field):
+class DictField(mongoengine.fields.DictField, Field):
     """A dictionary field that wraps a standard Python dictionary.
 
     If this field is not set, its default value is ``{}``.
@@ -172,6 +173,17 @@ class DictField(mongoengine.DictField, Field):
 
         return etau.get_class_name(self)
 
+    def validate(self, value):
+        if not isinstance(value, dict):
+            self.error("Value must be a dict")
+
+        if not all(map(lambda k: etau.is_str(k), value)):
+            self.error("Dict fields must have string keys")
+
+        if self.field is not None:
+            for _value in value.values():
+                self.field.validate(_value)
+
 
 class IntDictField(DictField):
     """A :class:`DictField` whose keys are integers.
@@ -198,47 +210,14 @@ class IntDictField(DictField):
 
     def validate(self, value):
         if not isinstance(value, dict):
-            self.error("Int dict field values must be dicts")
+            self.error("Value must be a dict")
 
         if not all(map(lambda k: isinstance(k, six.integer_types), value)):
             self.error("Int dict fields must have integer keys")
 
         if self.field is not None:
-            for val in value.values():
-                self.field.validate(val)
-
-
-class TargetsField(IntDictField):
-    """An :class:`DictField` that stores mapping between integer keys and
-    string targets.
-
-    If this field is not set, its default value is ``{}``.
-    """
-
-    def __init__(self, **kwargs):
-        super().__init__(field=StringField(), **kwargs)
-
-
-class MultiTargetsField(DictField):
-    """A :class:`DictField` whose values are :class:`TargetsField` instance.
-
-    This field can store multiple target dicts, keyed by a string.
-
-    If this field is not set, its default value is ``{}``.
-    """
-
-    def __init__(self, **kwargs):
-        super().__init__(field=TargetsField(), **kwargs)
-
-    def validate(self, value):
-        if not isinstance(value, dict):
-            self.error("Multi target field values must be dicts")
-
-        if not all(map(lambda k: etau.is_str(k), value)):
-            self.error("Multi target fields must have string keys")
-
-        for targets in value.values():
-            self.field.validate(targets)
+            for _value in value.values():
+                self.field.validate(_value)
 
 
 class KeypointsField(ListField):
@@ -292,6 +271,150 @@ class PolylinePointsField(ListField):
                 "Polyline points fields must contain a list of lists of "
                 "(x, y) pairs"
             )
+
+
+class _GeoField(Field):
+    """Base class for GeoJSON fields."""
+
+    # The GeoJSON type of the field. Subclasses must implement this
+    _TYPE = None
+
+    def to_mongo(self, value):
+        if isinstance(value, dict):
+            return value
+
+        return SON([("type", self._TYPE), ("coordinates", value)])
+
+    def to_python(self, value):
+        if isinstance(value, dict):
+            return value["coordinates"]
+
+        return value
+
+
+class GeoPointField(_GeoField, mongoengine.fields.PointField):
+    """A GeoJSON field storing a longitude and latitude coordinate point.
+
+    The data is stored as ``[longitude, latitude]``.
+    """
+
+    _TYPE = "Point"
+
+    def validate(self, value):
+        if isinstance(value, dict):
+            self.error("Geo fields expect coordinate lists, but found dict")
+
+        super().validate(value)
+
+
+class GeoLineStringField(_GeoField, mongoengine.fields.LineStringField):
+    """A GeoJSON field storing a line of longitude and latitude coordinates.
+
+    The data is stored as follow::
+
+        [[lon1, lat1], [lon2, lat2], ...]
+    """
+
+    _TYPE = "LineString"
+
+    def validate(self, value):
+        if isinstance(value, dict):
+            self.error("Geo fields expect coordinate lists, but found dict")
+
+        super().validate(value)
+
+
+class GeoPolygonField(_GeoField, mongoengine.fields.PolygonField):
+    """A GeoJSON field storing a polygon of longitude and latitude coordinates.
+
+    The data is stored as follows::
+
+        [
+            [[lon1, lat1], [lon2, lat2], ...],
+            [[lon1, lat1], [lon2, lat2], ...],
+            ...
+        ]
+
+    where the first element describes the boundary of the polygon and any
+    remaining entries describe holes.
+    """
+
+    _TYPE = "Polygon"
+
+    def validate(self, value):
+        if isinstance(value, dict):
+            self.error("Geo fields expect coordinate lists, but found dict")
+
+        super().validate(value)
+
+
+class GeoMultiPointField(_GeoField, mongoengine.fields.MultiPointField):
+    """A GeoJSON field storing a list of points.
+
+    The data is stored as follows::
+
+        [[lon1, lat1], [lon2, lat2], ...]
+    """
+
+    _TYPE = "MultiPoint"
+
+    def validate(self, value):
+        if isinstance(value, dict):
+            self.error("Geo fields expect coordinate lists, but found dict")
+
+        super().validate(value)
+
+
+class GeoMultiLineStringField(
+    _GeoField, mongoengine.fields.MultiLineStringField
+):
+    """A GeoJSON field storing a list of lines.
+
+    The data is stored as follows::
+
+        [
+            [[lon1, lat1], [lon2, lat2], ...],
+            [[lon1, lat1], [lon2, lat2], ...],
+            ...
+        ]
+    """
+
+    _TYPE = "MultiLineString"
+
+    def validate(self, value):
+        if isinstance(value, dict):
+            self.error("Geo fields expect coordinate lists, but found dict")
+
+        super().validate(value)
+
+
+class GeoMultiPolygonField(_GeoField, mongoengine.fields.MultiPolygonField):
+    """A GeoJSON field storing a list of polygons.
+
+    The data is stored as follows::
+
+        [
+            [
+                [[lon1, lat1], [lon2, lat2], ...],
+                [[lon1, lat1], [lon2, lat2], ...],
+                ...
+            ],
+            [
+                [[lon1, lat1], [lon2, lat2], ...],
+                [[lon1, lat1], [lon2, lat2], ...],
+                ...
+            ],
+            ...
+        ]
+    """
+
+    _TYPE = "MultiPolygon"
+
+    def validate(self, value):
+        if isinstance(value, dict):
+            self.error("Geo fields expect coordinate lists, but found dict")
+
+        super().validate(value)
 
 
 class VectorField(mongoengine.fields.BinaryField, Field):
@@ -353,7 +476,28 @@ class ArrayField(mongoengine.fields.BinaryField, Field):
             self.error("Only numpy arrays may be used in an array field")
 
 
-class EmbeddedDocumentField(mongoengine.EmbeddedDocumentField, Field):
+class ClassesField(ListField):
+    """A :class:`ListField` that stores class label strings.
+
+    If this field is not set, its default value is ``{}``.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(field=StringField(), **kwargs)
+
+
+class TargetsField(IntDictField):
+    """An :class:`DictField` that stores mapping between integer keys and
+    string targets.
+
+    If this field is not set, its default value is ``{}``.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(field=StringField(), **kwargs)
+
+
+class EmbeddedDocumentField(mongoengine.fields.EmbeddedDocumentField, Field):
     """A field that stores instances of a given type of
     :class:`fiftyone.core.odm.BaseEmbeddedDocument` object.
 
@@ -369,7 +513,9 @@ class EmbeddedDocumentField(mongoengine.EmbeddedDocumentField, Field):
         )
 
 
-class EmbeddedDocumentListField(mongoengine.EmbeddedDocumentListField, Field):
+class EmbeddedDocumentListField(
+    mongoengine.fields.EmbeddedDocumentListField, Field
+):
     """A field that stores a list of a given type of
     :class:`fiftyone.core.odm.BaseEmbeddedDocument` objects.
 
