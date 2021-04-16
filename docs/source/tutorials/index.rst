@@ -44,16 +44,23 @@ your datasets and turn your good models into *great models*.
 
 .. customcarditem::
     :header: Evaluating a classifier
-    :description: Evaluation made easy. This tutorial walks through and end-to-end example of fine-tuning a classifier and understanding its failure modes using FiftyOne.
+    :description: Evaluation made easy. This tutorial walks through an end-to-end example of fine-tuning a classifier and understanding its failure modes using FiftyOne.
     :link: evaluate_classifications.html
     :image: ../_static/images/tutorials/evaluate_classifications.png
     :tags: Model-Evaluation
 
 .. customcarditem::
     :header: Using image embeddings
-    :description: Visualize your data in new ways. This tutorial show how to use FiftyOne's powerful embeddings visualization capabilities to improve your image datasets.
+    :description: Visualize your data in new ways. This tutorial shows how to use FiftyOne's powerful embeddings visualization capabilities to improve your image datasets.
     :link: image_embeddings.html
     :image: ../_static/images/tutorials/image_embeddings.png
+    :tags: Visualization,Brain
+
+.. customcarditem::
+    :header: Using object embeddings
+    :description: Make sense of your detections. This tutorial demonstrates common patterns for using object embedding visualizations to diagnose and improve detection models.
+    :link: object_embeddings.html
+    :image: ../_static/images/tutorials/object_embeddings.png
     :tags: Visualization,Brain
 
 .. customcarditem::
@@ -65,7 +72,7 @@ your datasets and turn your good models into *great models*.
 
 .. customcarditem::
     :header: Finding classification mistakes
-    :description: Better models start with better data. This tutorial shows how FiftyOne can automatically find possible label mistakes in your classification datasets.
+    :description: Better models start with better data. This tutorial shows how FiftyOne can automatically find label mistakes in your classification datasets.
     :link: classification_mistakes.html
     :image: ../_static/images/tutorials/classification_mistakes.png
     :tags: Dataset-Evaluation,Brain
@@ -104,6 +111,7 @@ your datasets and turn your good models into *great models*.
    Evaluating object detections <evaluate_detections.ipynb>
    Evaluating a classifier <evaluate_classifications.ipynb>
    Using image embeddings <image_embeddings.ipynb>
+   Using object embeddings <object_embeddings.ipynb>
    Exploring image uniqueness <uniqueness.ipynb>
    Finding class mistakes <classification_mistakes.ipynb>
    Finding detection mistakes <detection_mistakes.ipynb>
