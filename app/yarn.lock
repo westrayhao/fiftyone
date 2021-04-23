@@ -18003,11 +18003,11 @@ modclean-patterns-default@latest:
 
 "player51@file:./player51::locator=fiftyone%40workspace%3A.":
   version: 1.0.0
-  resolution: "player51@file:./player51#./player51::hash=e5c920&locator=fiftyone%40workspace%3A."
+  resolution: "player51@file:./player51#./player51::hash=e913e1&locator=fiftyone%40workspace%3A."
   dependencies:
     "@ungap/event-target": ^0.2.2
     event-target: ^1.2.3
-  checksum: a28966c7fa1cc563e598118a10af29bb0e954e932f1440dd7599588de87a0b5054e8995c79b19bf16de7725d1d61b6aba684ec08abf3fcaa5defdb0a4fe83674
+  checksum: 2be289f9d1743064b233097cdc3900fd186013c93cc5013e8ae4fc6cac6b129eb82e9b697d0fdb7f2f2e64ee1a388447cdb7c455ce530db2859874ebd93e0c9f
   languageName: node
   linkType: hard
 

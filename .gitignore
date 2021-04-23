@@ -19,3 +19,4 @@ dist/
 
 /docs/build/
 /docs/source/api/
+.vscode/

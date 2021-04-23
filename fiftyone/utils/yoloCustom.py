@@ -16,7 +16,7 @@ import fiftyone.core.utils as fou
 import fiftyone.utils.data as foud
 
 
-class YOLOSampleParser(foud.ImageDetectionSampleParser):
+class YOLOCustomSampleParser(foud.ImageDetectionSampleParser):
     """Parser for samples in
     `YOLO format <https://github.com/AlexeyAB/darknet>`_.
 
@@ -54,7 +54,7 @@ class YOLOSampleParser(foud.ImageDetectionSampleParser):
         return load_yolo_annotations(target, self.classes)
 
 
-class YOLODatasetImporter(foud.LabeledImageDatasetImporter):
+class YOLOCustomDatasetImporter(foud.LabeledImageDatasetImporter):
     """Importer for YOLO datasets stored on disk.
 
     See :class:`fiftyone.types.dataset_types.YOLODataset` for format details.
@@ -156,7 +156,7 @@ class YOLODatasetImporter(foud.LabeledImageDatasetImporter):
             uuids_to_image_paths[uuid] = os.path.join(self.dataset_dir, image)
 
             labels_path = os.path.join(
-                self.dataset_dir, os.path.splitext(image)[0] + ".txt"
+                self.dataset_dir, "labels", os.path.splitext(image)[0].split("/")[1] + ".txt"
             )
 
             if os.path.exists(labels_path):
@@ -177,10 +177,10 @@ class YOLODatasetImporter(foud.LabeledImageDatasetImporter):
 
 
 
-class YOLODatasetExporter(foud.LabeledImageDatasetExporter):
-    """Exporter that writes YOLO datasets to disk.
+class YOLOCustomDatasetExporter(foud.LabeledImageDatasetExporter):
+    """Exporter that writes YOLOCustom datasets to disk.
 
-    See :class:`fiftyone.types.dataset_types.YOLODataset` for format details.
+    See :class:`fiftyone.types.dataset_types.YOLOCustomDataset` for format details.
 
     Args:
         export_dir: the directory to write the export
@@ -232,7 +232,7 @@ class YOLODatasetExporter(foud.LabeledImageDatasetExporter):
             default_ext=self.image_format,
             ignore_exts=True,
         )
-        self._writer = YOLOAnnotationWriter()
+        self._writer = YOLOCustomAnnotationWriter()
 
         etau.ensure_dir(self._data_dir)
         self._parse_classes()
@@ -285,10 +285,10 @@ class YOLODatasetExporter(foud.LabeledImageDatasetExporter):
             self._labels_map_rev = _to_labels_map_rev(self.classes)
 
 
-class YOLOAnnotationWriter(object):
-    """Class for writing annotations in YOLO format.
+class YOLOCustomAnnotationWriter(object):
+    """Class for writing annotations in YOLOCustom format.
 
-    See :class:`fiftyone.types.dataset_types.YOLODataset` for format details.
+    See :class:`fiftyone.types.dataset_types.YOLOCustomDataset` for format details.
     """
 
     def write(
