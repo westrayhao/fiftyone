@@ -1,4 +1,4 @@
-FROM ubuntu:bionic-20200630
+FROM ubuntu:20.04
 
 RUN apt update 
 RUN apt install python3-pip -y
