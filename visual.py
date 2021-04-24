@@ -1,7 +1,7 @@
 import fiftyone as fo
-
-name = "my-yolo-dataset3"
-dataset_dir = "/Dataset/cocomini"
+print(fo.list_datasets())
+name = "my-yolo-dataset9"
+dataset_dir = "/Dataset/coco128"
 
 # Create the dataset
 dataset = fo.Dataset.from_dir(

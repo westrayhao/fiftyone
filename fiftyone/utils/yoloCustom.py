@@ -155,8 +155,9 @@ class YOLOCustomDatasetImporter(foud.LabeledImageDatasetImporter):
 
             uuids_to_image_paths[uuid] = os.path.join(self.dataset_dir, image)
 
+            sub_path = os.path.join(*os.path.splitext(image)[0].split("/")[1:3]) 
             labels_path = os.path.join(
-                self.dataset_dir, "labels", os.path.splitext(image)[0].split("/")[1] + ".txt"
+                self.dataset_dir, "labels", sub_path+ ".txt"
             )
 
             if os.path.exists(labels_path):
